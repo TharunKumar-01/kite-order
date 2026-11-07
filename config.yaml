@@ -1,0 +1,131 @@
+# Trading Research Assistant configuration.
+# Learning tool, not financial advice. All values are tunable.
+
+timezone: Asia/Kolkata
+capital_total: 5000
+max_position_value: 2500
+max_open_positions: 2
+shortlist_size: 5
+min_avg_traded_value_20d: 20000000   # INR (2 crore)
+
+signals:
+  sma_fast: 50
+  sma_slow: 200
+  breakout_window: 20
+  volume_mult: 1.5
+  rsi_period: 14
+  rsi_max: 75
+  rel_strength_months: 3
+  # A stock must pass these 0/1 rules to be shortlisted at all.
+  require: [trend, not_overextended]
+  # Minimum total score to qualify (otherwise "no picks today").
+  min_total_score: 3.5
+  # How many top price-score candidates get per-stock news queries.
+  news_candidates: 15
+
+# Total = sum(weight * component). rel_strength is in % points vs Nifty,
+# clipped to +/- rs_clip before weighting; tailwind is in % (clipped +/- 2).
+weights:
+  trend: 2.0
+  breakout: 1.5
+  volume: 1.0
+  not_overextended: 1.0
+  rel_strength: 0.1
+  rs_clip: 20.0
+  news: 0.5
+  sector_tailwind: 0.5
+  sector_news: 0.25
+
+paper:
+  hold_days: 5
+  stop_loss_pct: 6.0
+  slippage_pct: 0.10
+  entry_mode: open          # the 09:45 price is also logged for comparison
+
+costs:                      # Zerodha delivery; VERIFY against Zerodha's brokerage calculator
+  brokerage_delivery: 0.0
+  stt_pct: 0.1              # on buy and sell
+  stt_round_to_rupee: true  # contract notes round STT to the nearest rupee
+  exchange_txn_pct: 0.00297
+  sebi_per_crore: 10
+  stamp_buy_pct: 0.015
+  gst_pct: 18               # on brokerage + exchange txn + sebi
+  dp_charge_per_sell: 15.34 # flat per scrip per sell day, incl. GST; verify
+
+news:
+  lookback_hours: 20        # since previous market close
+  max_headlines_per_stock: 3
+  exclude_at_or_below: -2   # hard exclusion for strongly negative news
+  positive: [order win, contract, approval, upgrade, record, beat, expansion, PLI, partnership]
+  negative: [ban, probe, fraud, downgrade, miss, penalty, resignation, recall, default, cut]
+  # Sector/theme queries (Google News RSS). Headlines that mention a stock
+  # are attached to it; the net keyword score feeds sector_news.
+  sector_queries:
+    Defence: "India defence stocks"
+    EV: "India electric vehicle stocks"
+    Infrastructure: "India infrastructure stocks order"
+    Semiconductor: "India semiconductor stocks"
+    Banks: "Indian bank stocks"
+    IT: "Indian IT stocks"
+    Pharma: "Indian pharma stocks"
+    Metals: "metal stocks India"
+    Energy: "oil gas stocks India"
+    Auto: "auto stocks India sales"
+    FMCG: "FMCG stocks India"
+    Capital Goods: "capital goods stocks India"
+
+market:
+  benchmark: "^NSEI"
+  history_days: 400         # daily bars for live signals (needs > sma_slow)
+  # Sector -> yfinance index. Missing/failed indices fall back to peer average.
+  sector_index:
+    Banks: "^NSEBANK"
+    IT: "^CNXIT"
+    Auto: "^CNXAUTO"
+    Pharma: "^CNXPHARMA"
+    Healthcare: "^CNXPHARMA"
+    Metals: "^CNXMETAL"
+    FMCG: "^CNXFMCG"
+    Energy: "^CNXENERGY"
+    Power: "^CNXENERGY"
+    Realty: "^CNXREALTY"
+    Infrastructure: "^CNXINFRA"
+  global_cues:
+    "S&P 500": "^GSPC"
+    "Nasdaq": "^IXIC"
+    "Nikkei": "^N225"
+    "Brent": "BZ=F"
+    "USD/INR": "INR=X"
+    "US 10Y": "^TNX"
+    "SOX (semis)": "^SOX"
+  # GIFT Nifty has no reliable yfinance ticker; set one here if you find one.
+  gift_nifty_ticker: null
+  # Which overnight cues count toward a sector/theme tailwind, with sign.
+  # (+1: cue up is good for the sector, -1: cue up is bad.)
+  sector_cues:
+    IT: {"^IXIC": 1, "INR=X": 1}
+    semiconductor: {"^SOX": 1}
+    Electronics: {"^SOX": 1}
+    Energy: {"BZ=F": 1}
+    Paints: {"BZ=F": -1}
+    Aviation: {"BZ=F": -1}
+    Metals: {"^GSPC": 1}
+    Pharma: {"^GSPC": 1}
+
+scheduler:
+  premarket_time: "08:15"
+  premarket_cutoff: "09:10"
+  pick_expiry_time: "11:00"
+  evening_time: "16:30"
+  weekly_report_time: "08:00"   # Saturday
+
+llm:
+  enabled: false
+  model: "claude-opus-5-5"
+  timeout_seconds: 20
+  max_headline_chars: 200
+
+kite:
+  # Only GTT triggers are ever sent (regular API orders need a registered static IP).
+  max_order_value: 2500     # hard cap per BUY trigger (qty x limit price)
+  login_port: 8765          # set the Kite app redirect URL to http://127.0.0.1:8765/kite

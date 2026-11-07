@@ -1,0 +1,32 @@
+[project]
+name = "trading-assistant"
+version = "0.1.0"
+description = "Local pre-market stock screener + Telegram approval + paper trading journal (learning tool, not advice)"
+requires-python = ">=3.11"
+dependencies = [
+  "pandas>=2.1",
+  "numpy>=1.26",
+  "yfinance>=0.2.40",
+  "feedparser>=6.0",
+  "requests>=2.31",
+  "python-telegram-bot>=20.0",
+  "pydantic>=2.5",
+  "PyYAML>=6.0",
+  "python-dotenv>=1.0",
+  "tabulate>=0.9",
+]
+
+[project.optional-dependencies]
+llm = ["anthropic>=0.40"]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

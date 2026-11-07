@@ -1,0 +1,117 @@
+symbol,name,sector,themes,group,aliases
+ADANIENT,Adani Enterprises,Infrastructure,infrastructure,nifty100,Adani Enterprises
+ADANIPORTS,Adani Ports and SEZ,Infrastructure,infrastructure;logistics,nifty100,Adani Ports
+APOLLOHOSP,Apollo Hospitals,Healthcare,,nifty100,
+ASIANPAINT,Asian Paints,Paints,consumer,nifty100,
+AXISBANK,Axis Bank,Banks,,nifty100,
+BAJAJ-AUTO,Bajaj Auto,Auto,EV,nifty100,Bajaj Auto
+BAJFINANCE,Bajaj Finance,Financials,,nifty100,Bajaj Finance
+BAJAJFINSV,Bajaj Finserv,Financials,,nifty100,
+BEL,Bharat Electronics,Defence,defence;semiconductor,nifty100,BEL
+BHARTIARTL,Bharti Airtel,Telecom,,nifty100,Airtel
+CIPLA,Cipla,Pharma,,nifty100,
+COALINDIA,Coal India,Energy,,nifty100,
+DRREDDY,Dr Reddy's Laboratories,Pharma,,nifty100,Dr Reddy
+EICHERMOT,Eicher Motors,Auto,EV,nifty100,
+ETERNAL,Eternal (Zomato),Consumer,internet,nifty100,Zomato;Eternal
+GRASIM,Grasim Industries,Cement,,nifty100,
+HCLTECH,HCL Technologies,IT,semiconductor,nifty100,
+HDFCBANK,HDFC Bank,Banks,,nifty100,HDFC Bank
+HDFCLIFE,HDFC Life Insurance,Insurance,,nifty100,
+HINDALCO,Hindalco Industries,Metals,EV,nifty100,
+HINDUNILVR,Hindustan Unilever,FMCG,,nifty100,HUL
+ICICIBANK,ICICI Bank,Banks,,nifty100,ICICI Bank
+INDIGO,InterGlobe Aviation,Aviation,,nifty100,IndiGo
+INFY,Infosys,IT,,nifty100,
+ITC,ITC,FMCG,,nifty100,
+JIOFIN,Jio Financial Services,Financials,,nifty100,
+JSWSTEEL,JSW Steel,Metals,infrastructure,nifty100,
+KOTAKBANK,Kotak Mahindra Bank,Banks,,nifty100,Kotak
+LT,Larsen & Toubro,Capital Goods,infrastructure;defence,nifty100,L&T;Larsen
+M&M,Mahindra & Mahindra,Auto,EV,nifty100,Mahindra;M&M
+MARUTI,Maruti Suzuki,Auto,EV,nifty100,
+MAXHEALTH,Max Healthcare,Healthcare,,nifty100,
+NESTLEIND,Nestle India,FMCG,,nifty100,
+NTPC,NTPC,Power,infrastructure,nifty100,
+ONGC,Oil & Natural Gas Corp,Energy,,nifty100,
+POWERGRID,Power Grid Corp,Power,infrastructure,nifty100,
+RELIANCE,Reliance Industries,Energy,,nifty100,
+SBILIFE,SBI Life Insurance,Insurance,,nifty100,
+SHRIRAMFIN,Shriram Finance,Financials,,nifty100,
+SBIN,State Bank of India,Banks,,nifty100,SBI
+SUNPHARMA,Sun Pharmaceutical,Pharma,,nifty100,Sun Pharma
+TATACONSUM,Tata Consumer Products,FMCG,,nifty100,
+TMPV,Tata Motors Passenger Vehicles,Auto,EV,nifty100,Tata Motors
+TATASTEEL,Tata Steel,Metals,infrastructure,nifty100,
+TCS,Tata Consultancy Services,IT,,nifty100,
+TECHM,Tech Mahindra,IT,,nifty100,
+TITAN,Titan Company,Consumer,,nifty100,
+TRENT,Trent,Consumer,,nifty100,
+ULTRACEMCO,UltraTech Cement,Cement,infrastructure,nifty100,
+WIPRO,Wipro,IT,,nifty100,
+ABB,ABB India,Capital Goods,infrastructure,nifty100,
+ADANIENSOL,Adani Energy Solutions,Power,infrastructure,nifty100,
+ADANIGREEN,Adani Green Energy,Power,,nifty100,
+ADANIPOWER,Adani Power,Power,,nifty100,
+AMBUJACEM,Ambuja Cements,Cement,infrastructure,nifty100,
+BAJAJHLDNG,Bajaj Holdings,Financials,,nifty100,
+BANKBARODA,Bank of Baroda,Banks,,nifty100,
+BOSCHLTD,Bosch,Auto,EV,nifty100,
+BPCL,Bharat Petroleum,Energy,,nifty100,
+BRITANNIA,Britannia Industries,FMCG,,nifty100,
+CANBK,Canara Bank,Banks,,nifty100,
+CGPOWER,CG Power and Industrial Solutions,Capital Goods,semiconductor;infrastructure,nifty100,
+CHOLAFIN,Cholamandalam Investment,Financials,,nifty100,
+DABUR,Dabur India,FMCG,,nifty100,
+DIVISLAB,Divi's Laboratories,Pharma,,nifty100,
+DLF,DLF,Realty,infrastructure,nifty100,
+DMART,Avenue Supermarts,Consumer,,nifty100,DMart
+GAIL,GAIL (India),Energy,infrastructure,nifty100,
+GODREJCP,Godrej Consumer Products,FMCG,,nifty100,
+HAL,Hindustan Aeronautics,Defence,defence,nifty100,HAL
+HAVELLS,Havells India,Capital Goods,,nifty100,
+HINDZINC,Hindustan Zinc,Metals,,nifty100,
+HYUNDAI,Hyundai Motor India,Auto,EV,nifty100,
+ICICIGI,ICICI Lombard General Insurance,Insurance,,nifty100,
+INDHOTEL,Indian Hotels,Consumer,,nifty100,
+IOC,Indian Oil Corp,Energy,,nifty100,IOC;Indian Oil
+IRFC,Indian Railway Finance Corp,Financials,infrastructure,nifty100,
+JINDALSTEL,Jindal Steel,Metals,infrastructure,nifty100,
+JSWENERGY,JSW Energy,Power,EV,nifty100,
+LICI,Life Insurance Corp of India,Insurance,,nifty100,LIC
+LODHA,Lodha Developers,Realty,infrastructure,nifty100,
+LTIM,LTIMindtree,IT,,nifty100,
+MAZDOCK,Mazagon Dock Shipbuilders,Defence,defence,nifty100,Mazagon Dock
+MOTHERSON,Samvardhana Motherson,Auto,EV,nifty100,Motherson
+NAUKRI,Info Edge,Consumer,internet,nifty100,Info Edge;Naukri
+PFC,Power Finance Corp,Financials,infrastructure,nifty100,PFC
+PIDILITIND,Pidilite Industries,Chemicals,,nifty100,
+PNB,Punjab National Bank,Banks,,nifty100,
+RECLTD,REC,Financials,infrastructure,nifty100,REC
+SHREECEM,Shree Cement,Cement,infrastructure,nifty100,
+SIEMENS,Siemens,Capital Goods,infrastructure,nifty100,
+SOLARINDS,Solar Industries,Defence,defence,nifty100,
+TATAPOWER,Tata Power,Power,EV;infrastructure,nifty100,
+TORNTPHARM,Torrent Pharmaceuticals,Pharma,,nifty100,
+TVSMOTOR,TVS Motor,Auto,EV,nifty100,
+UNITDSPR,United Spirits,FMCG,,nifty100,United Spirits
+VBL,Varun Beverages,FMCG,,nifty100,
+VEDL,Vedanta,Metals,,nifty100,
+ZYDUSLIFE,Zydus Lifesciences,Pharma,,nifty100,
+DIXON,Dixon Technologies,Electronics,semiconductor;watchlist,watchlist,Dixon
+KAYNES,Kaynes Technology,Electronics,semiconductor;watchlist,watchlist,Kaynes
+SYRMA,Syrma SGS Technology,Electronics,semiconductor;watchlist,watchlist,Syrma
+MOSCHIP,MosChip Technologies,Electronics,semiconductor;watchlist,watchlist,
+TATAELXSI,Tata Elxsi,IT,semiconductor;EV;watchlist,watchlist,
+BDL,Bharat Dynamics,Defence,defence;watchlist,watchlist,Bharat Dynamics
+COCHINSHIP,Cochin Shipyard,Defence,defence;watchlist,watchlist,Cochin Shipyard
+DATAPATTNS,Data Patterns,Defence,defence;semiconductor;watchlist,watchlist,
+BEML,BEML,Defence,defence;infrastructure;watchlist,watchlist,
+EXIDEIND,Exide Industries,Auto,EV;watchlist,watchlist,
+ARE&M,Amara Raja Energy & Mobility,Auto,EV;watchlist,watchlist,Amara Raja
+OLECTRA,Olectra Greentech,Auto,EV;watchlist,watchlist,
+SONACOMS,Sona BLW Precision Forgings,Auto,EV;watchlist,watchlist,Sona Comstar;Sona BLW
+RVNL,Rail Vikas Nigam,Infrastructure,infrastructure;watchlist,watchlist,RVNL
+IRCON,IRCON International,Infrastructure,infrastructure;watchlist,watchlist,
+NBCC,NBCC (India),Infrastructure,infrastructure;watchlist,watchlist,
+KEC,KEC International,Capital Goods,infrastructure;watchlist,watchlist,

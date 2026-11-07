@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- trading-assistant project data ---
+data/journal.db
+data/journal.db-*
+data/*.lock
+logs/
+reports/

@@ -95,6 +95,33 @@ MIGRATIONS: list[str] = [
     );
     CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);
     """,
+    # v2: Kite GTT orders placed from Telegram
+    """
+    CREATE TABLE kite_orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pick_id INTEGER,
+        symbol TEXT NOT NULL, qty INTEGER NOT NULL,
+        mode TEXT NOT NULL,                -- now / price
+        ltp REAL NOT NULL, trigger_price REAL NOT NULL, limit_price REAL NOT NULL,
+        sl_trigger REAL, sl_limit REAL, sl_pct REAL,
+        status TEXT NOT NULL,              -- draft/cancelled/stale/placing/placed/triggered/filled/
+                                           -- unfilled/failed/closed/stopped
+        sl_status TEXT,                    -- none/active/deferred/failed/triggered/deleted
+        buy_gtt_id INTEGER, sl_gtt_id INTEGER,
+        held_before INTEGER,               -- shares already owned at confirm time
+        fill_price REAL, triggered_on TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL, confirmed_at TEXT, updated_at TEXT
+    );
+    """,
+    # v3: target SELL orders (buy_gtt_id then holds the sell trigger's id)
+    """
+    ALTER TABLE kite_orders ADD COLUMN side TEXT NOT NULL DEFAULT 'BUY';
+    """,
+    # v4: per-stock price step (tick size) used to round this order's prices
+    """
+    ALTER TABLE kite_orders ADD COLUMN tick REAL;
+    """,
 ]
 
 

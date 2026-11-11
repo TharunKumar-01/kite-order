@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.user.trading-assistant.bot</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string><string>-m</string><string>assistant.cli</string><string>bot</string>
+  </array>
+  <key>WorkingDirectory</key><string>__ROOT__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TRADING_ASSISTANT_HOME</key><string>__ROOT__</string>
+    <key>HOME</key><string>__HOME__</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>LANG</key><string>en_US.UTF-8</string>
+  </dict>
+  <!-- System service: runs at boot as this user, no login needed. -->
+  <key>UserName</key><string>__USER__</string>
+  <key>GroupName</key><string>staff</string>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>__ROOT__/logs/launchd-bot.out</string>
+  <key>StandardErrorPath</key><string>__ROOT__/logs/launchd-bot.err</string>
+</dict>
+</plist>

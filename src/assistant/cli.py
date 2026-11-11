@@ -32,6 +32,19 @@ def cmd_premarket(args) -> int:
     return 0
 
 
+def cmd_scan(args) -> int:
+    from .scan import run_scan
+    from .telegram_bot import TelegramClient, strip_html
+    msgs = run_scan(connect(), load_config())
+    tg = None if args.print else TelegramClient()
+    for text, buttons in msgs:
+        if tg:
+            tg.send(text, buttons)
+        else:
+            print(strip_html(text), end="\n\n")
+    return 0
+
+
 def cmd_evening(args) -> int:
     from .jobs import evening_job
     cfg, conn = load_config(), connect()
@@ -222,6 +235,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--dry-run", action="store_true", help="print instead of sending; store nothing")
     s.add_argument("--force", action="store_true", help="ignore trading-day and cutoff checks")
     s.set_defaults(fn=cmd_premarket)
+    s = sub.add_parser("scan", help="run the screen now + check Kite holdings; sends to Telegram")
+    s.add_argument("--print", action="store_true", help="print to the console instead of sending")
+    s.set_defaults(fn=cmd_scan)
     s = sub.add_parser("evening", help="score picks, update paper portfolio, send summary")
     s.add_argument("--date", help="session date YYYY-MM-DD (default today IST)")
     s.add_argument("--dry-run", action="store_true", help="print the summary instead of sending (DB is still updated)")

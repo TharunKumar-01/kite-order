@@ -107,14 +107,29 @@ def alert(text: str) -> None:
 # =====================================================================================
 HELP = (
     "<b>Commands</b>\n"
+    "/scan – run the screen now: 5 buy ideas + a check of your holdings (profit to book, weak ones)\n"
     "/status – open paper positions + today's picks\n"
     "/pnl – paper P&amp;L vs Nifty, hit rates\n"
     "/pause – stop sending picks\n"
     "/resume – resume picks\n"
     "/help – this message\n"
     "/kitelogin – daily Kite login link\n"
-    "/kitetest – place + delete a harmless test GTT\n\n"
-    "Log a real fill: <code>bought HAL 1 4210.5</code> or <code>sold HAL 1 4400</code>"
+    "/kitetest – place + delete a harmless test GTT\n"
+    "/orders – your bot-placed Kite orders\n"
+    "/gtt – every active GTT in your Kite account (/gtt all = incl. fired/failed/cancelled)\n"
+    "/holdings – your Kite holdings, P&amp;L and which have a target/stop-loss GTT\n"
+    "(I check every 5 min and message you when any GTT fires, fails or expires)\n"
+    "/cancel N – remove order N's triggers\n"
+    "/stop – switch Kite ordering off · /orderson – back on\n\n"
+    "<b>Order via Kite GTT</b> (you confirm every order):\n"
+    "<code>buy HAL 2 @4210 sl 3950</code>\n"
+    "<code>buy HAL ₹2500 @now sl 6%</code>\n"
+    "<code>buy ₹2500</code> (last approved pick, now, default SL)\n"
+    "<code>sl none</code> = no stop-loss\n"
+    "<b>Target sell</b> (shares you hold):\n"
+    "<code>sell JPL all @1455</code> · <code>sell JPL 12 profit 4000</code> · "
+    "<code>sell JPL all target 5%</code>\n\n"
+    "Log a manual fill: <code>bought HAL 1 4210.5</code> or <code>sold HAL 1 4400</code>"
 )
 
 TRADE_RE = re.compile(r"^\s*(bought|sold)\s+([A-Za-z0-9&\-]+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s*$", re.I)
@@ -153,7 +168,9 @@ def handle_decision(conn, pick_id: int, action: str, now_ist: datetime) -> tuple
 
 
 def run_bot() -> None:
-    from telegram import Update
+    import asyncio
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
     from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                               MessageHandler, filters)
 
@@ -199,9 +216,15 @@ def run_bot() -> None:
                     log.warning("could not edit message: %s", e)
                 if result == "recorded" and action == "approve":
                     sym = conn.execute("SELECT symbol FROM picks WHERE id=?", (int(pid),)).fetchone()["symbol"]
+                    k = load_config().kite
                     await q.message.reply_html(
-                        f"Logged for paper trading. If you buy for real, reply:\n"
-                        f"<code>bought {esc(sym)} &lt;qty&gt; &lt;price&gt;</code>")
+                        f"Logged for paper trading. To order it in Kite, tap below or type e.g.\n"
+                        f"<code>buy {esc(sym)} ₹{k.max_order_value:,.0f} @now sl {k.default_sl_pct:g}%</code> · "
+                        f"<code>buy {esc(sym)} 2 @&lt;price&gt; sl &lt;price&gt;</code>\n"
+                        f"(Bought elsewhere? <code>bought {esc(sym)} &lt;qty&gt; &lt;price&gt;</code>)",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                            f"🛒 Buy ₹{k.max_order_value:,.0f} @now · SL {k.default_sl_pct:g}%",
+                            callback_data=f"ordnew:{pid}")]]))
             elif result == "duplicate":
                 try:
                     await q.edit_message_reply_markup(reply_markup=None)
@@ -216,6 +239,20 @@ def run_bot() -> None:
         text = update.effective_message.text or ""
         if "request_token=" in text:
             await kite_token(update, text)
+            return
+        from .orders import OrderError, parse_order, parse_sell
+        try:
+            sell = parse_sell(text)
+            req = None if sell else parse_order(text)
+        except OrderError as e:
+            ex = "sell JPL all @1455" if text.strip().lower().startswith("sell") else "buy HAL ₹2500 @now sl 6%"
+            await reply(update, f"Order not understood: {esc(e)}\nExample: <code>{ex}</code>")
+            return
+        if sell is not None:
+            await start_order(update.effective_message, sell)
+            return
+        if req is not None:
+            await start_order(update.effective_message, req)
             return
         parsed = parse_trade(text)
         if not parsed:
@@ -296,25 +333,235 @@ def run_bot() -> None:
     async def cmd_token(update: Update, ctx) -> None:
         await kite_token(update, " ".join(ctx.args or []))
 
-    async def cmd_kitetest(update: Update, ctx) -> None:
-        import asyncio
+    def with_conn(fn, *args):
+        """Run fn(conn, *args) on a worker thread with its own SQLite connection."""
+        def run():
+            c = connect()
+            try:
+                return fn(c, *args)
+            finally:
+                c.close()
+        return asyncio.to_thread(run)
 
+    async def cmd_kitetest(update: Update, ctx) -> None:
         from .kite import KiteError, test_gtt
-        conn = connect()
         try:
-            steps = await asyncio.to_thread(test_gtt, conn, "PNB")
+            steps = await with_conn(test_gtt, "PNB")
             await reply(update, "\n".join(esc(s) for s in steps))
         except KiteError as e:
             await reply(update, f"❌ GTT test failed: {esc(e)}")
-        finally:
-            conn.close()
+
+    # ---------------- Kite GTT ordering ----------------
+    def _draft(conn, req, pick_id):
+        from .kite import Kite
+        from .orders import (OrderError, SellRequest, build_plan, build_sell_plan, create_draft, draft_text,
+                             get_ltp, latest_approved_symbol, ordering_enabled)
+        if not ordering_enabled(conn):
+            raise OrderError("ordering is switched off (/stop). Send /orderson to allow it.")
+        kite = Kite(conn)  # raises if not logged in today
+        if isinstance(req, SellRequest):
+            held, avg, last = kite.holding(req.symbol)
+            last = last or get_ltp(req.symbol)
+            plan = build_sell_plan(req, held, avg, last, tick=kite.tick_size(req.symbol, last))
+            existing = kite.active_sells(req.symbol)
+            if existing:
+                plan.notes.append("⚠️ already active sell trigger(s) on this stock: " + ", ".join(
+                    f"GTT {g} ({q} @ ₹{p:,.2f})" for g, q, p in existing) + ". Delete in Kite if replacing.")
+            oid = create_draft(conn, plan, None)
+            return oid, draft_text(conn, oid)
+        sym = req.symbol
+        if sym is None and pick_id is not None:
+            r = conn.execute("SELECT symbol FROM picks WHERE id=?", (pick_id,)).fetchone()
+            sym = r["symbol"] if r else None
+        if sym is None:
+            last = latest_approved_symbol(conn, now_ist())
+            if not last:
+                raise OrderError("which stock? e.g. buy HAL ₹2500 (no approved pick today to default to)")
+            sym, pick_id = last
+        if pick_id is None:
+            r = conn.execute("SELECT id FROM picks WHERE symbol=? AND status='approved' ORDER BY id DESC LIMIT 1",
+                             (sym,)).fetchone()
+            pick_id = r["id"] if r else None
+        ltp = get_ltp(sym)
+        plan = build_plan(req, sym, ltp, tick=kite.tick_size(sym, ltp))
+        oid = create_draft(conn, plan, pick_id)
+        return oid, draft_text(conn, oid)
+
+    async def start_order(msg, req, pick_id=None) -> None:
+        from .kite import KiteError
+        from .orders import OrderError
+        try:
+            oid, text = await with_conn(_draft, req, pick_id)
+        except (OrderError, KiteError) as e:
+            await msg.reply_html(f"Order not prepared: {esc(e)}")
+            return
+        await msg.reply_html(text, reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Confirm & send to Kite", callback_data=f"ordok:{oid}"),
+            InlineKeyboardButton("✖ Cancel", callback_data=f"ordno:{oid}")]]))
+
+    def _confirm(conn, oid):
+        from .kite import Kite
+        from .orders import confirm
+        return confirm(conn, oid, Kite(conn))
+
+    def _cancel(conn, oid):
+        from .kite import Kite
+        from .orders import cancel_draft, cancel_order
+        o = conn.execute("SELECT status FROM kite_orders WHERE id=?", (oid,)).fetchone()
+        if o and o["status"] == "draft":
+            return cancel_draft(conn, oid)
+        return cancel_order(conn, oid, Kite(conn))
+
+    async def on_order_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        from .kite import KiteError
+        from .orders import OrderRequest
+        q = update.callback_query
+        if not authorized(update):
+            log.warning("ignored order callback from unauthorized chat")
+            return
+        action, _, sid = (q.data or "").partition(":")
+        num = int(sid)
+        if action == "ordnew":
+            await q.answer("Preparing…")
+            await start_order(q.message, OrderRequest(amount=load_config().kite.max_order_value), pick_id=num)
+            return
+        await q.answer("Working…" if action == "ordok" else "Cancelling…")
+        try:
+            result = await with_conn(_confirm if action == "ordok" else _cancel, num)
+        except KiteError as e:
+            result = f"❌ {e}"
+        if re.match(r"Order #\d+ is already", result):  # double tap: keep the first result on screen
+            return
+        base = q.message.text_html if q.message and q.message.text else ""
+        try:
+            await q.edit_message_text(f"{base}\n\n{esc(result)}", parse_mode="HTML", reply_markup=None,
+                                      disable_web_page_preview=True)
+        except Exception:  # noqa: BLE001
+            await q.message.reply_html(esc(result))
+
+    async def cmd_orders(update: Update, ctx) -> None:
+        from .kite import Kite, KiteError
+        from .orders import orders_text, sync
+
+        def run(conn):
+            msgs = []
+            try:
+                msgs = sync(conn, Kite(conn))
+            except KiteError as e:
+                msgs = [f"(not synced with Kite: {e})"]
+            return msgs, orders_text(conn)
+        msgs, text = await with_conn(run)
+        await reply(update, "\n".join([esc(m) for m in msgs] + [text]))
+
+    async def cmd_gtt(update: Update, ctx) -> None:
+        from .kite import Kite, KiteError
+        from .orders import gtt_list_text
+        show_all = bool(ctx.args) and ctx.args[0].lower() == "all"
+
+        def run(conn):
+            return gtt_list_text(conn, Kite(conn).gtts(), show_all)
+        try:
+            await reply(update, await with_conn(run))
+        except KiteError as e:
+            await reply(update, f"❌ {esc(e)}")
+
+    async def cmd_holdings(update: Update, ctx) -> None:
+        from .kite import Kite, KiteError
+        from .orders import holdings_text
+
+        def run(conn):
+            k = Kite(conn)
+            return holdings_text(k.holdings(), k.gtts())
+        try:
+            await reply(update, await with_conn(run))
+        except KiteError as e:
+            await reply(update, f"❌ {esc(e)}")
+
+    async def watch_loop(application) -> None:
+        """Every 5 min: bot-order tracking + alerts for any GTT that fires/fails (works without launchd)."""
+        from .orders import sync_tick
+        while True:
+            await asyncio.sleep(300)
+            try:
+                msgs: list[str] = []
+                await with_conn(lambda c: sync_tick(c, load_config(), now_ist(), msgs.append))
+                for m in msgs:
+                    await application.bot.send_message(owner, esc(m), parse_mode="HTML",
+                                                       disable_web_page_preview=True)
+            except Exception as e:  # noqa: BLE001
+                log.error("watch loop error: %s", redact(f"{type(e).__name__}: {e}"))
+
+    async def post_init(application) -> None:
+        application.create_task(watch_loop(application))
+
+    scan_lock = asyncio.Lock()
+
+    async def cmd_scan(update: Update, ctx) -> None:
+        from .scan import run_scan
+        if scan_lock.locked():
+            await reply(update, "A scan is already running; results will arrive shortly.")
+            return
+        async with scan_lock:
+            await reply(update, "🔎 Scanning prices, news, sector and global cues… (about a minute)")
+            try:
+                msgs = await with_conn(run_scan, load_config())
+            except Exception as e:  # noqa: BLE001
+                log.error("scan failed: %s", redact(repr(e)))
+                await reply(update, f"❌ Scan failed: {esc(type(e).__name__)}. Details are in logs/bot.log.")
+                return
+            for text, buttons in msgs:
+                markup = InlineKeyboardMarkup([[InlineKeyboardButton(lbl, callback_data=cb) for lbl, cb in row]
+                                               for row in buttons]) if buttons else None
+                for i, ch in enumerate(split_message(text)):
+                    last = i == len(split_message(text)) - 1
+                    await update.effective_message.reply_html(ch, disable_web_page_preview=True,
+                                                              reply_markup=markup if last else None)
+
+    async def on_scan_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        from .orders import OrderError, parse_order
+        q = update.callback_query
+        if not authorized(update):
+            log.warning("ignored scan callback from unauthorized chat")
+            return
+        sym = (q.data or "").partition(":")[2]
+        await q.answer("Preparing…")
+        k = load_config().kite
+        try:
+            req = parse_order(f"buy {sym} ₹{k.max_order_value:.0f} @now sl {k.default_sl_pct:g}%")
+        except OrderError as e:
+            await q.message.reply_html(f"Order not prepared: {esc(e)}")
+            return
+        await start_order(q.message, req)
+
+    async def cmd_cancel(update: Update, ctx) -> None:
+        from .kite import KiteError
+        arg = (ctx.args or [""])[0].lstrip("#")
+        if not arg.isdigit():
+            await reply(update, "Usage: /cancel &lt;order #&gt; (see /orders)")
+            return
+        try:
+            await reply(update, esc(await with_conn(_cancel, int(arg))))
+        except KiteError as e:
+            await reply(update, f"❌ {esc(e)}")
+
+    async def cmd_stop(update: Update, ctx) -> None:
+        from .orders import set_ordering
+        n = await with_conn(set_ordering, False)
+        await reply(update, "⛔ Kite ordering switched OFF" + (f" ({n} unconfirmed draft(s) voided)" if n else "")
+                    + ". Triggers already in Kite stay there: use /orders and /cancel N to remove them.")
+
+    async def cmd_orderson(update: Update, ctx) -> None:
+        from .orders import set_ordering
+        await with_conn(set_ordering, True)
+        await reply(update, "🟢 Kite ordering switched ON. Every order still needs your Confirm tap.")
 
     async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         log.error("bot error: %s", redact(repr(ctx.error)))
 
-    app = Application.builder().token(s.telegram_bot_token).build()
+    app = Application.builder().token(s.telegram_bot_token).post_init(post_init).build()
     app.add_handler(CommandHandler("help", cmd_help, filters=only_owner))
     app.add_handler(CommandHandler("start", cmd_help, filters=only_owner))
+    app.add_handler(CommandHandler("scan", cmd_scan, filters=only_owner))
     app.add_handler(CommandHandler("status", cmd_status, filters=only_owner))
     app.add_handler(CommandHandler("pnl", cmd_pnl, filters=only_owner))
     app.add_handler(CommandHandler("pause", cmd_pause, filters=only_owner))
@@ -322,6 +569,14 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("kitelogin", cmd_kitelogin, filters=only_owner))
     app.add_handler(CommandHandler("token", cmd_token, filters=only_owner))
     app.add_handler(CommandHandler("kitetest", cmd_kitetest, filters=only_owner))
+    app.add_handler(CommandHandler("orders", cmd_orders, filters=only_owner))
+    app.add_handler(CommandHandler("cancel", cmd_cancel, filters=only_owner))
+    app.add_handler(CommandHandler("gtt", cmd_gtt, filters=only_owner))
+    app.add_handler(CommandHandler("holdings", cmd_holdings, filters=only_owner))
+    app.add_handler(CommandHandler("stop", cmd_stop, filters=only_owner))
+    app.add_handler(CommandHandler("orderson", cmd_orderson, filters=only_owner))
+    app.add_handler(CallbackQueryHandler(on_order_button, pattern=r"^(ordok|ordno|ordnew):\d+$"))
+    app.add_handler(CallbackQueryHandler(on_scan_buy, pattern=r"^ordsym:[A-Z0-9&\-]{1,20}$"))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(approve|reject):\d+$"))
     app.add_handler(MessageHandler(only_owner & filters.TEXT & ~filters.COMMAND, on_text))
     app.add_error_handler(on_error)

@@ -122,6 +122,11 @@ def run_tick(conn: sqlite3.Connection, cfg: Config, now: datetime | None = None)
                 alert(f"⚠️ <b>{esc(d.job)} job failed</b> ({rd})\n<code>{esc(last)}</code>\n"
                       f"{esc(redact(where[0]) if where else '')}\nSee logs/tick.log")
                 results.append((d.job, "failed"))
+        try:  # track Kite triggers placed from Telegram (read-only unless a stop-loss is due/cleanup)
+            from .orders import sync_tick
+            sync_tick(conn, cfg, now, lambda m: alert(esc(m)))
+        except Exception as e:  # noqa: BLE001
+            log.error("order sync failed: %s", redact(f"{type(e).__name__}: {e}"))
     finally:
         fcntl.flock(lock_f, fcntl.LOCK_UN)
         lock_f.close()

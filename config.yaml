@@ -37,7 +37,7 @@ weights:
   sector_news: 0.25
 
 paper:
-  hold_days: 5
+  hold_days: 40             # trading days. 5y backtest: 5 days lost to costs; 20-60 days beat Nifty (README)
   stop_loss_pct: 6.0
   slippage_pct: 0.10
   entry_mode: open          # the 09:45 price is also logged for comparison
@@ -129,3 +129,22 @@ kite:
   # Only GTT triggers are ever sent (regular API orders need a registered static IP).
   max_order_value: 2500     # hard cap per BUY trigger (qty x limit price)
   login_port: 8765          # set the Kite app redirect URL to http://127.0.0.1:8765/kite
+  max_orders_per_day: 2     # confirmed BUY orders per day
+  default_sl_pct: 6.0       # stop-loss used when the message has none ("sl none" to skip)
+  now_trigger_gap_pct: 0.3  # "@now" = trigger 0.3% above last price (GTT can't be a market order)
+  now_limit_buffer_pct: 0.5 # "@now" limit price = trigger + 0.5%, so it fills on a quick uptick
+  sl_limit_buffer_pct: 1.0  # stop-loss sell limit = trigger - 1%, so it fills on a fast fall
+  max_price_deviation_pct: 10.0  # reject a buy price more than 10% from the last price (typo guard)
+  max_sl_pct: 25.0
+  max_target_pct: 50.0      # target sell price at most 50% above the last price (typo guard)
+  draft_ttl_seconds: 180    # Confirm button expires after 3 minutes (price may have moved)
+  buy_valid_until: "15:30"  # a buy trigger that hasn't fired by this time on its trading day is deleted
+                            # (with its stop-loss). Orders confirmed after it are for the next trading day.
+                            # "" = keep for Kite's full year.
+
+review:
+  # /scan (manual screen) also checks your Kite holdings with these rules. It only flags; you decide.
+  take_profit_pct: 10.0     # gain vs your average price that counts as "decent profit"
+  fast_sma: 20              # "momentum fading" = last close below the 20-day average
+  weak_drop_5d_pct: 5.0     # "weak" = fell this much in 5 days while below the 50-day average
+  weakest_count: 5          # weakest stocks in the universe, listed as "avoid buying"

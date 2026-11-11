@@ -32,7 +32,7 @@ def test_sanitize_and_dedupe():
 
 def test_no_regular_order_code():
     """No regular-order API anywhere. The only write path to Kite is GTT, in kite.py only."""
-    forbidden = re.compile(r"kiteconnect|place_order|modify_order|orders/regular|orders/amo|orders/co|/orders\b", re.I)
+    forbidden = re.compile(r"kiteconnect|place_order|modify_order|orders/regular|orders/amo|orders/co", re.I)
     for p in SRC.glob("*.py"):
         text = p.read_text()
         if p.name == "cli.py":  # selftest contains the search strings themselves
@@ -41,6 +41,10 @@ def test_no_regular_order_code():
         if p.name != "kite.py":
             assert "api.kite.trade" not in text, f"Kite API called outside kite.py: {p.name}"
     kite = (SRC / "kite.py").read_text()
+    assert not re.search(r"/orders\b", kite), "Kite /orders endpoint referenced"
+    # the ordering logic may only use the Kite client, never raw HTTP or the private request method
+    orders = (SRC / "orders.py").read_text()
+    assert "requests" not in orders and "_req(" not in orders
     writes = re.findall(r'_req\("(POST|PUT|DELETE)", f?"([^"]+)"', kite)
     assert {path for _, path in writes} <= {"/gtt/triggers", "/gtt/triggers/{int(trigger_id)}"}, writes
     assert '"product": "CNC"' in kite and '"order_type": "LIMIT"' in kite

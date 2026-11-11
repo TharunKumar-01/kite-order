@@ -225,3 +225,4 @@ data/journal.db-*
 data/*.lock
 logs/
 reports/
+data/ticks_NSE.json

@@ -94,7 +94,7 @@ def compute_picks(conn: sqlite3.Connection, cfg: Config, today: date) -> dict:
             missing.append(stale)
     log.info("premarket compute finished in %.1fs: %d picks", time.time() - t0, len(picks))
     return {"picks": picks, "cues": cues, "bench": bench, "missing": missing, "asof": asof,
-            "n_eval": len(cands), "n_eligible": len(eligible)}
+            "n_eval": len(cands), "n_eligible": len(eligible), "cands": cands}
 
 
 def header_text(result: dict, today: date) -> str:

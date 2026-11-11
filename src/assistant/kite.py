@@ -5,7 +5,9 @@ Zerodha only accepts those from a registered static IP. Only GTT endpoints write
 every GTT is CNC + LIMIT on NSE with a hard value cap (enforced here, not just in the UI)."""
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import logging
 import re
@@ -14,7 +16,7 @@ from dataclasses import dataclass
 
 import requests
 
-from .config import load_config, load_secrets
+from .config import DB_PATH, load_config, load_secrets
 from .db import kv_get, kv_set
 from .util import iso_utc, now_ist, redact
 
@@ -29,7 +31,15 @@ class KiteError(RuntimeError):
 
 
 def tick_round(price: float, tick: float = 0.05) -> float:
-    return round(round(price / tick) * tick, 2)
+    return round(round(round(price / tick, 6)) * tick, 2)
+
+
+def band_tick(price: float) -> float:
+    """NSE equity tick size by price band (fallback when Kite's instrument list is unavailable)."""
+    for upper, tick in ((250, 0.01), (1000, 0.05), (5000, 0.10), (10000, 0.50), (20000, 1.0)):
+        if price < upper:
+            return tick
+    return 5.0
 
 
 def login_url() -> str:
@@ -80,6 +90,7 @@ class GTTOrder:
     trigger: float
     limit: float
     last_price: float
+    tick: float = 0.05     # the stock's price step; prices are rounded to it
 
     def validate(self) -> None:
         cfg = load_config()
@@ -119,16 +130,91 @@ class Kite:
     def holdings(self) -> list[dict]:
         return self._req("GET", "/portfolio/holdings")
 
+    def tick_size(self, symbol: str, price_hint: float) -> float:
+        """Price step for an NSE symbol from Kite's instrument list (cached per IST day)."""
+        cache = DB_PATH.parent / "ticks_NSE.json"
+        today = now_ist().date().isoformat()
+        ticks: dict = {}
+        try:
+            data = json.loads(cache.read_text())
+            if data.get("date") == today:
+                ticks = data["ticks"]
+        except (OSError, ValueError, KeyError):
+            pass
+        if not ticks:
+            try:
+                r = requests.get(f"{API}/instruments/NSE", timeout=30,
+                                 headers={"X-Kite-Version": "3", "Authorization": self.auth})
+                r.raise_for_status()
+                ticks = {row["tradingsymbol"]: float(row["tick_size"])
+                         for row in csv.DictReader(io.StringIO(r.text)) if row.get("tick_size")}
+                cache.write_text(json.dumps({"date": today, "ticks": ticks}))
+            except (requests.RequestException, ValueError, KeyError, OSError) as e:
+                log.warning("instrument list unavailable (%s); using NSE price bands", type(e).__name__)
+        t = ticks.get(symbol)
+        return float(t) if t and t > 0 else band_tick(price_hint)
+
+    def positions(self) -> dict:
+        return self._req("GET", "/portfolio/positions")
+
     def gtts(self) -> list[dict]:
         return self._req("GET", "/gtt/triggers")
+
+    def gtt(self, trigger_id: int) -> dict:
+        return self._req("GET", f"/gtt/triggers/{int(trigger_id)}")
+
+    def held_qty(self, symbol: str) -> tuple[int, float | None]:
+        """Shares of `symbol` owned now (settled + T1 + today's CNC net) and today's buy price if any."""
+        total = sum(int(h.get("quantity", 0)) + int(h.get("t1_quantity", 0))
+                    for h in self.holdings() if h.get("tradingsymbol") == symbol)
+        day_price = None
+        for p in (self.positions() or {}).get("net", []):
+            if p.get("tradingsymbol") == symbol and p.get("product") == "CNC":
+                total += int(p.get("quantity", 0))
+                if int(p.get("buy_quantity", 0)) > 0:
+                    day_price = float(p.get("buy_price") or 0) or None
+        return total, day_price
+
+    def holding(self, symbol: str) -> tuple[int, float | None, float | None]:
+        """(shares owned incl. T1, average buy price, last price) for one symbol."""
+        qty, cost, last = 0, 0.0, None
+        for h in self.holdings():
+            if h.get("tradingsymbol") == symbol:
+                q = int(h.get("quantity", 0)) + int(h.get("t1_quantity", 0))
+                qty += q
+                cost += q * float(h.get("average_price") or 0)
+                last = float(h.get("last_price") or 0) or last
+        return qty, (cost / qty if qty else None), last
+
+    def active_sells(self, symbol: str) -> list[tuple[int, int, float]]:
+        """Active SELL GTTs on `symbol` (any origin) as (id, qty, price); read-only, used for warnings."""
+        out = []
+        for g in self.gtts():
+            if g.get("status") == "active" and (g.get("condition") or {}).get("tradingsymbol") == symbol:
+                for leg in g.get("orders") or []:
+                    if leg.get("transaction_type") == "SELL":
+                        out.append((int(g["id"]), int(leg.get("quantity", 0)), float(leg.get("price") or 0)))
+        return out
+
+    def sold_today(self, symbol: str) -> tuple[int, float | None]:
+        for p in (self.positions() or {}).get("net", []):
+            if p.get("tradingsymbol") == symbol and int(p.get("sell_quantity", 0)) > 0:
+                return int(p["sell_quantity"]), float(p.get("sell_price") or 0) or None
+        return 0, None
+
+    def sold_price_today(self, symbol: str) -> float | None:
+        for p in (self.positions() or {}).get("net", []):
+            if p.get("tradingsymbol") == symbol and int(p.get("sell_quantity", 0)) > 0:
+                return float(p.get("sell_price") or 0) or None
+        return None
 
     # ---- GTT (the only write path) ----
     def place_gtt(self, o: GTTOrder) -> int:
         o.validate()
-        condition = {"exchange": "NSE", "tradingsymbol": o.symbol, "trigger_values": [tick_round(o.trigger)],
+        condition = {"exchange": "NSE", "tradingsymbol": o.symbol, "trigger_values": [tick_round(o.trigger, o.tick)],
                      "last_price": o.last_price}
         orders = [{"exchange": "NSE", "tradingsymbol": o.symbol, "transaction_type": o.side, "quantity": o.qty,
-                   "order_type": "LIMIT", "product": "CNC", "price": tick_round(o.limit)}]
+                   "order_type": "LIMIT", "product": "CNC", "price": tick_round(o.limit, o.tick)}]
         data = self._req("POST", "/gtt/triggers", {"type": "single", "condition": json.dumps(condition),
                                                     "orders": json.dumps(orders)})
         log.info("GTT placed: %s %s x%d trigger %.2f limit %.2f -> id %s", o.side, o.symbol, o.qty, o.trigger,
@@ -152,9 +238,10 @@ def test_gtt(conn: sqlite3.Connection, symbol: str = "PNB") -> list[str]:
     if d is None or d.empty:
         raise KiteError(f"no price for {symbol}")
     ltp = float(d["close"].iloc[-1])
-    trig = tick_round(ltp * 0.80)
+    tick = k.tick_size(symbol, ltp)
+    trig = tick_round(ltp * 0.80, tick)
     steps.append(f"{symbol} last ₹{ltp:,.2f}; test BUY 1 trigger/limit ₹{trig:,.2f} (20% below, won't fire)")
-    tid = k.place_gtt(GTTOrder(symbol, "BUY", 1, trig, trig, round(ltp, 2)))
+    tid = k.place_gtt(GTTOrder(symbol, "BUY", 1, trig, trig, round(ltp, 2), tick))
     steps.append(f"GTT accepted, id {tid}  ✅ (no static IP needed for GTT)")
     try:
         k.delete_gtt(tid)

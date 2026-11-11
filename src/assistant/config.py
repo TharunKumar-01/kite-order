@@ -104,6 +104,25 @@ class LLM(BaseModel):
 class Kite(BaseModel):
     max_order_value: float = 2500     # hard cap per BUY GTT (qty * limit), enforced in kite.py
     login_port: int = 8765            # redirect URL: http://127.0.0.1:<port>/kite
+    max_orders_per_day: int = 2       # confirmed BUY orders per IST day
+    default_sl_pct: float = 6.0       # stop-loss when none is given ("sl none" to skip)
+    now_trigger_gap_pct: float = 0.3  # "@now": trigger this far above the last price
+    now_limit_buffer_pct: float = 0.5 # "@now": limit this far above the trigger so it fills
+    sl_limit_buffer_pct: float = 1.0  # stop-loss sell limit this far below its trigger
+    max_price_deviation_pct: float = 10.0  # fat-finger guard: price must be within this of last price
+    max_sl_pct: float = 25.0
+    max_target_pct: float = 50.0      # a target SELL may be at most this far above the last price
+    draft_ttl_seconds: int = 180      # a confirmation button is valid this long
+    buy_valid_until: str = "15:30"    # untriggered BUY GTTs (+ their stop-loss) are deleted at this IST time
+                                      # on the order's trading day; "" keeps them up to Kite's 1 year
+
+
+class Review(BaseModel):
+    """Rules for the /scan check of your Kite holdings (flags only; nothing is sold automatically)."""
+    take_profit_pct: float = 10.0     # gain from your average price that counts as "decent profit"
+    fast_sma: int = 20                # momentum fading = close below this many days' average
+    weak_drop_5d_pct: float = 5.0     # a 5-day fall this big while below the 50-day average = weak
+    weakest_count: int = 5            # weakest universe stocks listed as "avoid buying"
 
 
 class Config(BaseModel):
@@ -122,6 +141,7 @@ class Config(BaseModel):
     scheduler: Scheduler = Scheduler()
     llm: LLM = LLM()
     kite: Kite = Kite()
+    review: Review = Review()
 
     @property
     def tz(self) -> ZoneInfo:

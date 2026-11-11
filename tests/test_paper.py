@@ -11,6 +11,7 @@ def _cal(n=20):
 
 
 def test_time_exit_and_costs(cfg):
+    cfg = cfg.model_copy(update={"paper": cfg.paper.model_copy(update={"hold_days": 5})})
     closes = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109]
     prices = {"A.NS": make_bars(closes)}
     cal = prices["A.NS"].index

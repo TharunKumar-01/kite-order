@@ -5,6 +5,8 @@
   <key>Label</key><string>com.user.trading-assistant.bot</string>
   <key>ProgramArguments</key>
   <array>
+    <!-- caffeinate -s: keep the Mac from sleeping while the bot runs on the charger (no admin needed) -->
+    <string>/usr/bin/caffeinate</string><string>-s</string>
     <string>__PYTHON__</string><string>-m</string><string>assistant.cli</string><string>bot</string>
   </array>
   <key>WorkingDirectory</key><string>__ROOT__</string>

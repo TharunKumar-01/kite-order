@@ -131,6 +131,10 @@ kite:
   login_port: 8765          # set the Kite app redirect URL to http://127.0.0.1:8765/kite
   max_orders_per_day: 2     # confirmed BUY orders per day
   default_sl_pct: 6.0       # stop-loss used when the message has none ("sl none" to skip)
+  default_target_pct: 25.0  # target used when the message has none ("tp none" or 0 = stop-loss only).
+                            # Stop-loss + target go in ONE OCO GTT: whichever hits first sells, the other is
+                            # cancelled. 5y backtest, 40-day hold: no target +₹35/trade, 30% +₹21, 25% +₹16,
+                            # 20% +₹10, 15% +₹4, 10% −₹7. Closer targets cut the big winners.
   now_trigger_gap_pct: 0.3  # "@now" = trigger 0.3% above last price (GTT can't be a market order)
   now_limit_buffer_pct: 0.5 # "@now" limit price = trigger + 0.5%, so it fills on a quick uptick
   sl_limit_buffer_pct: 1.0  # stop-loss sell limit = trigger - 1%, so it fills on a fast fall

@@ -123,9 +123,11 @@ HELP = (
     "/stop – switch Kite ordering off · /orderson – back on\n\n"
     "<b>Order via Kite GTT</b> (you confirm every order):\n"
     "<code>buy HAL 2 @4210 sl 3950</code>\n"
-    "<code>buy HAL ₹2500 @now sl 6%</code>\n"
+    "<code>buy HAL ₹2500 @now sl 6% tp 25%</code>\n"
     "<code>buy ₹2500</code> (last approved pick, now, default SL)\n"
-    "<code>sl none</code> = no stop-loss\n"
+    "<code>sl none</code> / <code>tp none</code> = no stop-loss / no target. Stop-loss + target go in one "
+    "OCO sell GTT: whichever price comes first sells, the other is cancelled.\n"
+    "/oco N [20%] – add a target to filled order N (replaces its stop-loss GTT with an OCO)\n"
     "<b>Target sell</b> (shares you hold):\n"
     "<code>sell JPL all @1455</code> · <code>sell JPL 12 profit 4000</code> · "
     "<code>sell JPL all target 5%</code>\n\n"
@@ -223,7 +225,8 @@ def run_bot() -> None:
                         f"<code>buy {esc(sym)} 2 @&lt;price&gt; sl &lt;price&gt;</code>\n"
                         f"(Bought elsewhere? <code>bought {esc(sym)} &lt;qty&gt; &lt;price&gt;</code>)",
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-                            f"🛒 Buy ₹{k.max_order_value:,.0f} @now · SL {k.default_sl_pct:g}%",
+                            f"🛒 Buy ₹{k.max_order_value:,.0f} @now · SL {k.default_sl_pct:g}%"
+                            + (f" · TP {k.default_target_pct:g}%" if k.default_target_pct else ""),
                             callback_data=f"ordnew:{pid}")]]))
             elif result == "duplicate":
                 try:
@@ -533,6 +536,50 @@ def run_bot() -> None:
             return
         await start_order(q.message, req)
 
+    async def cmd_oco(update: Update, ctx) -> None:
+        from .kite import Kite, KiteError
+        from .orders import OrderError, oco_preview
+        args = ctx.args or []
+        if not args or not args[0].isdigit():
+            await reply(update, "Usage: <code>/oco 5</code> or <code>/oco 5 20%</code> (order numbers: /orders)")
+            return
+        pct = None
+        if len(args) > 1:
+            try:
+                pct = float(args[1].rstrip("%"))
+            except ValueError:
+                await reply(update, "Target must be a percentage, e.g. <code>/oco 5 20%</code>")
+                return
+        try:
+            text, pct = await with_conn(lambda c: oco_preview(c, int(args[0]), Kite(c), pct))
+        except (OrderError, KiteError) as e:
+            await reply(update, f"Not possible: {esc(e)}")
+            return
+        await update.effective_message.reply_html(text, reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Confirm", callback_data=f"ocook:{int(args[0])}:{pct:g}"),
+            InlineKeyboardButton("✖ Cancel", callback_data="ocono:0:0")]]))
+
+    async def on_oco_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        from .kite import Kite, KiteError
+        from .orders import upgrade_to_oco
+        q = update.callback_query
+        if not authorized(update):
+            log.warning("ignored oco callback from unauthorized chat")
+            return
+        action, oid, pct = (q.data or "").split(":")
+        base = q.message.text_html if q.message and q.message.text else ""
+        if action == "ocono":
+            await q.answer("Cancelled")
+            await q.edit_message_text(f"{base}\n\n✖ Cancelled, nothing changed.", parse_mode="HTML",
+                                      reply_markup=None)
+            return
+        await q.answer("Working…")
+        try:
+            result = await with_conn(lambda c: upgrade_to_oco(c, int(oid), Kite(c), float(pct)))
+        except KiteError as e:
+            result = f"❌ {e}"
+        await q.edit_message_text(f"{base}\n\n{esc(result)}", parse_mode="HTML", reply_markup=None)
+
     async def cmd_cancel(update: Update, ctx) -> None:
         from .kite import KiteError
         arg = (ctx.args or [""])[0].lstrip("#")
@@ -571,11 +618,13 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("kitetest", cmd_kitetest, filters=only_owner))
     app.add_handler(CommandHandler("orders", cmd_orders, filters=only_owner))
     app.add_handler(CommandHandler("cancel", cmd_cancel, filters=only_owner))
+    app.add_handler(CommandHandler("oco", cmd_oco, filters=only_owner))
     app.add_handler(CommandHandler("gtt", cmd_gtt, filters=only_owner))
     app.add_handler(CommandHandler("holdings", cmd_holdings, filters=only_owner))
     app.add_handler(CommandHandler("stop", cmd_stop, filters=only_owner))
     app.add_handler(CommandHandler("orderson", cmd_orderson, filters=only_owner))
     app.add_handler(CallbackQueryHandler(on_order_button, pattern=r"^(ordok|ordno|ordnew):\d+$"))
+    app.add_handler(CallbackQueryHandler(on_oco_button, pattern=r"^(ocook|ocono):\d+:\d+(\.\d+)?$"))
     app.add_handler(CallbackQueryHandler(on_scan_buy, pattern=r"^ordsym:[A-Z0-9&\-]{1,20}$"))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(approve|reject):\d+$"))
     app.add_handler(MessageHandler(only_owner & filters.TEXT & ~filters.COMMAND, on_text))

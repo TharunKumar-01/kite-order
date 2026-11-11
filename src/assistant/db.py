@@ -122,6 +122,12 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE kite_orders ADD COLUMN tick REAL;
     """,
+    # v5: OCO target leg (stop-loss + target in one two-leg GTT, id kept in sl_gtt_id)
+    """
+    ALTER TABLE kite_orders ADD COLUMN tgt_trigger REAL;
+    ALTER TABLE kite_orders ADD COLUMN tgt_limit REAL;
+    ALTER TABLE kite_orders ADD COLUMN tgt_pct REAL;
+    """,
 ]
 
 

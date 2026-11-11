@@ -146,6 +146,8 @@ same days.
 | fixed 20 days | 1,505 | 17 | +1.02% | +0.22% | +0.81% | +₹4 |
 | fixed 40 days | 1,107 | 28 | +2.43% | +0.42% | +2.01% | +₹36 |
 | fixed 60 days | 901 | 38 | +4.04% | +0.64% | +3.39% | +₹75 |
+| 40 days + 25% target (OCO default) | 1,175 | – | – | – | – | +₹16 |
+| 40 days + 15% target | 1,343 | – | – | – | – | +₹4 |
 | trailing 15% stop (max 120 days) | 777 | 50 | +4.56% | +0.70% | +3.86% | +₹87 |
 | sell on close below 50-day avg (max 120 days) | 998 | 28 | +3.29% | +0.52% | +2.77% | +₹56 |
 
@@ -190,9 +192,11 @@ redirect URL `http://127.0.0.1:8765/kite`, then put `KITE_API_KEY` and `KITE_API
 | Message | Meaning |
 |---|---|
 | `buy HAL 2 @4210 sl 3950` | 2 shares, limit 4210, stop-loss trigger 3950 |
-| `buy PNB ₹2500 @now sl 6%` | as many shares as ₹2,500 buys, "now", stop-loss 6% below |
+| `buy PNB ₹2500 @now sl 6%` | as many shares as ₹2,500 buys, "now", stop-loss 6% below, default 25% target |
+| `buy PNB ₹2500 @now sl 6% tp 20%` | same, with a 20% target (`tp 160` = a price, `tp none` = no target) |
 | `buy ₹2500` | today's last approved pick, now, default 6% stop-loss |
 | `... sl none` | no stop-loss |
+| `/oco 5` or `/oco 5 20%` | add a target to filled order 5: its stop-loss GTT is replaced by an OCO (preview, then Confirm) |
 | 🛒 button after Approve | ₹2,500 now with the default stop-loss |
 | `sell JPL all @1455` | target sell of all your JPL at ₹1,455 (trigger just above, so it fills) |
 | `sell JPL 12 profit 4000` | price that keeps ₹4,000 after sell charges, from Kite's average buy price |
@@ -205,8 +209,14 @@ redirect URL `http://127.0.0.1:8765/kite`, then put `KITE_API_KEY` and `KITE_API
   deletes it and its stop-loss and tells you. An order confirmed after 15:30 is for the next trading day.
   Set `""` to keep buy triggers for Kite's full year. Target sells and stop-losses on filled buys never expire.
   Once a trigger fires, the limit order lasts for that day only.
-- **Stop-loss:** a SELL trigger, with its limit 1% below the trigger so it still fills on a fast fall.
-  It's placed together with the buy. If you already hold that stock, it waits until the new buy fills,
+- **Stop-loss + target = one OCO GTT.** Kite's two-leg GTT sells at whichever price comes first and
+  cancels the other leg, so there's never a second sell waiting for shares you've already sold.
+  - The stop-loss leg's limit is 1% below its trigger, so it fills on a fast fall.
+  - The target leg's trigger sits just above its limit, so it fills once it fires.
+  - The default target is `kite.default_target_pct` (25%). In the 5-year study, every target lowered the
+    average result (see "Exit-rule study"), so it's set wide; use `tp none` to skip it.
+  - With only a stop-loss or only a target, it's a single GTT.
+  - It's placed together with the buy. If you already hold that stock, it waits until the new buy fills,
   so it can never sell shares you bought earlier.
 - **Tracking:** the 5-minute tick (and `/orders`) reports when a trigger fires, when the buy fills
   (logged to `real_trades`), when it doesn't fill, and when the stop-loss fires. It also removes the

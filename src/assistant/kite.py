@@ -221,6 +221,27 @@ class Kite:
                  o.limit, data.get("trigger_id"))
         return int(data["trigger_id"])
 
+    def place_oco(self, symbol: str, qty: int, sl_trigger: float, sl_limit: float, tgt_trigger: float,
+                  tgt_limit: float, last_price: float, tick: float = 0.05) -> int:
+        """One two-leg (OCO) SELL GTT: a stop-loss below and a target above. Whichever fires first
+        sells, and Kite cancels the other leg. Both legs are CNC LIMIT sells of the same quantity."""
+        sl = GTTOrder(symbol, "SELL", qty, sl_trigger, sl_limit, last_price, tick)
+        tg = GTTOrder(symbol, "SELL", qty, tgt_trigger, tgt_limit, last_price, tick)
+        sl.validate()
+        tg.validate()
+        lo, hi = tick_round(sl_trigger, tick), tick_round(tgt_trigger, tick)
+        if not lo < hi:
+            raise KiteError("stop-loss trigger must be below the target trigger")
+        condition = {"exchange": "NSE", "tradingsymbol": symbol, "trigger_values": [lo, hi], "last_price": last_price}
+        orders = [{"exchange": "NSE", "tradingsymbol": symbol, "transaction_type": "SELL", "quantity": qty,
+                   "order_type": "LIMIT", "product": "CNC", "price": tick_round(p, tick)}
+                  for p in (sl_limit, tgt_limit)]
+        data = self._req("POST", "/gtt/triggers", {"type": "two-leg", "condition": json.dumps(condition),
+                                                    "orders": json.dumps(orders)})
+        log.info("OCO GTT placed: SELL %s x%d stop %.2f / target %.2f -> id %s", symbol, qty, lo, hi,
+                 data.get("trigger_id"))
+        return int(data["trigger_id"])
+
     def delete_gtt(self, trigger_id: int) -> None:
         self._req("DELETE", f"/gtt/triggers/{int(trigger_id)}")
         log.info("GTT %s deleted", trigger_id)

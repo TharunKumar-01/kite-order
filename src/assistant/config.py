@@ -106,6 +106,7 @@ class Kite(BaseModel):
     login_port: int = 8765            # redirect URL: http://127.0.0.1:<port>/kite
     max_orders_per_day: int = 2       # confirmed BUY orders per IST day
     default_sl_pct: float = 6.0       # stop-loss when none is given ("sl none" to skip)
+    default_target_pct: float = 25.0  # target leg of the OCO sell, % above the buy price ("tp none" / 0 = no target)
     now_trigger_gap_pct: float = 0.3  # "@now": trigger this far above the last price
     now_limit_buffer_pct: float = 0.5 # "@now": limit this far above the trigger so it fills
     sl_limit_buffer_pct: float = 1.0  # stop-loss sell limit this far below its trigger

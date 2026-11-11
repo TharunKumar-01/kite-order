@@ -217,7 +217,8 @@ def run_scan(conn: sqlite3.Connection, cfg: Config, now: datetime | None = None)
         msgs.append(("No buy ideas: nothing passed the rules, affordability, liquidity and score threshold.", None))
     for i, c in enumerate(picks, 1):
         text = pick_text(i, c, cfg).rsplit("\n", 1)[0]  # drop the paper-entry line
-        msgs.append((text, [[(f"🛒 Buy {c.stock.symbol} ₹{cap:,.0f} @now · SL {cfg.kite.default_sl_pct:g}%",
+        msgs.append((text, [[(f"🛒 Buy {c.stock.symbol} ₹{cap:,.0f} @now · SL {cfg.kite.default_sl_pct:g}%"
+                              + (f" · TP {cfg.kite.default_target_pct:g}%" if cfg.kite.default_target_pct else ""),
                               f"ordsym:{c.stock.symbol}")]]))
 
     # holdings (needs today's Kite login)

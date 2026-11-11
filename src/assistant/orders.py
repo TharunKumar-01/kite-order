@@ -36,6 +36,9 @@ class OrderRequest:
     sl_price: float | None = None
     sl_pct: float | None = None
     no_sl: bool = False
+    tp_price: float | None = None
+    tp_pct: float | None = None
+    no_tp: bool = False
 
 
 @dataclass
@@ -51,6 +54,9 @@ class Plan:
     sl_pct: float | None
     notes: list[str] = field(default_factory=list)
     tick: float = 0.05
+    tgt_trigger: float | None = None
+    tgt_limit: float | None = None
+    tgt_pct: float | None = None
 
     @property
     def value(self) -> float:
@@ -85,12 +91,23 @@ def parse_order(text: str) -> OrderRequest | None:
     req = OrderRequest()
     i = 0
     if i < len(toks) and re.fullmatch(r"[A-Za-z][A-Za-z0-9&\-]{0,19}", toks[i]) \
-            and toks[i].lower() not in NOW_WORDS | {"at", "sl", "stop", "for"}:
+            and toks[i].lower() not in NOW_WORDS | {"at", "sl", "stop", "for", "tp", "target", "tgt"}:
         req.symbol = toks[i].upper()
         i += 1
     while i < len(toks):
         tok, low = toks[i], toks[i].lower()
         nxt = toks[i + 1] if i + 1 < len(toks) else None
+        if low in ("tp", "target", "tgt"):
+            if nxt is None:
+                raise OrderError("give a target after 'tp', e.g. tp 20% or tp 230")
+            if nxt.lower() in ("none", "no", "off", "0"):
+                req.no_tp = True
+            elif nxt.endswith("%"):
+                req.tp_pct = _num(nxt[:-1])
+            else:
+                req.tp_price = _num(nxt.lstrip("@₹"))
+            i += 2
+            continue
         if low in ("sl", "stop", "stoploss", "sl@"):
             if nxt is None:
                 raise OrderError("give a stop-loss after 'sl', e.g. sl 6% or sl 3950")
@@ -196,8 +213,22 @@ def build_plan(req: OrderRequest, symbol: str, ltp: float, cfg: Config | None = 
         if sl_pct < 0.5:
             raise OrderError("stop-loss is too close to the buy price (< 0.5%)")
         sl_limit = rnd(sl_trigger * (1 - k.sl_limit_buffer_pct / 100))
+    tgt_trigger = tgt_limit = tgt_pct = None
+    if not req.no_tp and (req.tp_price is not None or req.tp_pct or k.default_target_pct):
+        if req.tp_price is not None:
+            tgt_limit = rnd(req.tp_price)
+            tgt_pct = (tgt_limit / limit - 1) * 100
+        else:
+            tgt_pct = req.tp_pct if req.tp_pct is not None else k.default_target_pct
+            tgt_limit = rnd(limit * (1 + tgt_pct / 100))
+        if tgt_limit <= limit or tgt_limit < ltp * (1 + k.now_trigger_gap_pct / 100):
+            raise OrderError(f"target ₹{tgt_limit:,.2f} must be above both the buy price and the last price")
+        if tgt_pct > k.max_target_pct:
+            raise OrderError(f"target {tgt_pct:.1f}% above is more than the {k.max_target_pct:g}% limit")
+        tgt_trigger = _tick_up(tgt_limit + max(tick, tgt_limit * 0.0005), tick)  # fires above the limit -> fills
     return Plan(symbol, qty, mode, round(ltp, 2), trigger, limit, sl_trigger, sl_limit,
-                round(sl_pct, 2) if sl_pct is not None else None, notes, tick)
+                round(sl_pct, 2) if sl_pct is not None else None, notes, tick,
+                tgt_trigger, tgt_limit, round(tgt_pct, 2) if tgt_pct is not None else None)
 
 
 @dataclass
@@ -351,11 +382,11 @@ def create_draft(conn: sqlite3.Connection, plan: Plan, pick_id: int | None = Non
     side = "SELL" if plan.mode == "target" else "BUY"
     cur = conn.execute(
         """INSERT INTO kite_orders(pick_id,symbol,qty,mode,ltp,trigger_price,limit_price,sl_trigger,sl_limit,
-           sl_pct,status,sl_status,note,created_at,updated_at,side,tick)
-           VALUES(?,?,?,?,?,?,?,?,?,?,'draft',?,?,?,?,?,?)""",
+           sl_pct,status,sl_status,note,created_at,updated_at,side,tick,tgt_trigger,tgt_limit,tgt_pct)
+           VALUES(?,?,?,?,?,?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,?)""",
         (pick_id, plan.symbol, plan.qty, plan.mode, plan.ltp, plan.trigger, plan.limit, plan.sl_trigger,
-         plan.sl_limit, plan.sl_pct, "none" if plan.sl_trigger is None else None, "; ".join(plan.notes) or None,
-         now, now, side, plan.tick))
+         plan.sl_limit, plan.sl_pct, "none" if plan.sl_trigger is None and plan.tgt_trigger is None else None,
+         "; ".join(plan.notes) or None, now, now, side, plan.tick, plan.tgt_trigger, plan.tgt_limit, plan.tgt_pct))
     conn.commit()
     return int(cur.lastrowid)
 
@@ -402,21 +433,44 @@ def draft_text(conn: sqlite3.Connection, oid: int, cfg: Config | None = None) ->
     else:
         how = (f"Trigger ₹{o['trigger_price']:,.2f} → limit ₹{o['limit_price']:,.2f} (last ₹{o['ltp']:,.2f}). "
                f"{expiry}")
-    if o["sl_trigger"]:
-        sl = (f"Stop-loss: SELL {o['qty']} if price ≤ ₹{o['sl_trigger']:,.2f} "
-              f"(−{o['sl_pct']:.1f}%), limit ₹{o['sl_limit']:,.2f}")
-    else:
-        sl = "Stop-loss: <b>none</b>"
+    sl = _exit_lines(o, cfg, value, charges)
     lines = [f"🛒 <b>Confirm order #{oid}</b>",
              f"BUY <b>{o['symbol']}</b> × {o['qty']}  (NSE · delivery/CNC · limit)",
              how,
              f"Value ≈ ₹{value:,.0f} (cap ₹{cfg.kite.max_order_value:,.0f}) · buy charges ≈ ₹{charges:,.2f}",
-             sl]
+             *sl]
     if o["note"]:
         lines.append(f"<i>Note: {o['note']}</i>")
     lines.append(f"<i>Price from Yahoo, may lag. Button valid {cfg.kite.draft_ttl_seconds // 60} min. "
                  "Your decision, not advice.</i>")
     return "\n".join(lines)
+
+
+def _net_at(o, sell_price: float, cfg: Config, buy_charges: float) -> float:
+    """Rupees made (or lost) selling the whole order at `sell_price`, after buy and sell charges."""
+    v = o["qty"] * sell_price
+    return v - o["qty"] * o["limit_price"] - buy_charges - leg_costs(v, "sell", cfg.costs).total
+
+
+def _exit_lines(o, cfg: Config, value: float, buy_charges: float) -> list[str]:
+    sl, tg = o["sl_trigger"], o["tgt_trigger"]
+    if not sl and not tg:
+        return ["Exit: <b>no stop-loss, no target</b>"]
+    out = []
+    if sl and tg:
+        out.append("Exit: <b>one OCO sell GTT</b> (whichever price is hit first sells; the other is cancelled)")
+    if sl:
+        out.append(f"  🛡 stop-loss ≤ ₹{sl:,.2f} (−{o['sl_pct']:.1f}%), sell limit ₹{o['sl_limit']:,.2f} → "
+                   f"<b>≈ −₹{abs(_net_at(o, o['sl_limit'], cfg, buy_charges)):,.0f}</b>")
+    else:
+        out.append("  🛡 stop-loss: <b>none</b>")
+    if tg:
+        out.append(f"  🎯 target ≥ ₹{tg:,.2f} (+{o['tgt_pct']:.1f}%), sell limit ₹{o['tgt_limit']:,.2f} → "
+                   f"<b>≈ +₹{_net_at(o, o['tgt_limit'], cfg, buy_charges):,.0f}</b>")
+    else:
+        out.append("  🎯 target: none")
+    out.append("  <i>(₹ after all charges, if the buy fills at its limit)</i>")
+    return out
 
 
 def _sell_draft_text(o, cfg: Config) -> str:
@@ -494,11 +548,11 @@ def confirm(conn: sqlite3.Connection, oid: int, kite, now: datetime | None = Non
         return f"❌ Kite rejected the buy trigger: {e}"
     _upd(conn, oid, status="placed", buy_gtt_id=buy_id, held_before=held_before)
     msg = [f"✅ Buy trigger placed in Kite (GTT {buy_id}): {sym} × {qty}, limit ₹{o['limit_price']:,.2f}."]
-    if o["sl_trigger"]:
+    if o["sl_trigger"] or o["tgt_trigger"]:
         if held_before > 0:
             _upd(conn, oid, sl_status="deferred")
-            msg.append(f"You already hold {held_before} {sym}, so the stop-loss will be placed once this buy "
-                       "fills (so it can never sell your earlier shares).")
+            msg.append(f"You already hold {held_before} {sym}, so the {_exit_name(o)} will be placed once this "
+                       "buy fills (so it can never sell your earlier shares).")
         else:
             msg.append(_place_sl(conn, oid, kite))
     msg.append("Track with /orders · cancel with /cancel " + str(oid))
@@ -525,16 +579,37 @@ def _confirm_sell(conn: sqlite3.Connection, o, kite) -> str:
             f"(trigger ₹{o['trigger_price']:,.2f}).\nTrack with /orders · cancel with /cancel {oid}")
 
 
+def _exit_name(o) -> str:
+    if o["sl_trigger"] and o["tgt_trigger"]:
+        return "stop-loss + target (OCO)"
+    return "stop-loss" if o["sl_trigger"] else "target"
+
+
 def _place_sl(conn: sqlite3.Connection, oid: int, kite) -> str:
+    """Place the exit for a buy: one OCO GTT (stop-loss + target), or a single stop-loss / target GTT.
+    Its id is kept in sl_gtt_id either way."""
     o = conn.execute("SELECT * FROM kite_orders WHERE id=?", (oid,)).fetchone()
+    name = _exit_name(o)
     try:
-        sl_id = kite.place_gtt(GTTOrder(o["symbol"], "SELL", o["qty"], o["sl_trigger"], o["sl_limit"],
-                                        o["ltp"], _tick(o)))
+        if o["sl_trigger"] and o["tgt_trigger"]:
+            gid = kite.place_oco(o["symbol"], o["qty"], o["sl_trigger"], o["sl_limit"], o["tgt_trigger"],
+                                 o["tgt_limit"], o["ltp"], _tick(o))
+        elif o["sl_trigger"]:
+            gid = kite.place_gtt(GTTOrder(o["symbol"], "SELL", o["qty"], o["sl_trigger"], o["sl_limit"],
+                                          o["ltp"], _tick(o)))
+        else:
+            gid = kite.place_gtt(GTTOrder(o["symbol"], "SELL", o["qty"], o["tgt_trigger"], o["tgt_limit"],
+                                          o["ltp"], _tick(o)))
     except KiteError as e:
-        _upd(conn, oid, sl_status="failed", note=f"stop-loss: {e}"[:300])
-        return f"⚠️ Stop-loss trigger was NOT accepted ({e}). Set it in Kite yourself."
-    _upd(conn, oid, sl_gtt_id=sl_id, sl_status="active")
-    return f"🛡 Stop-loss trigger placed (GTT {sl_id}): SELL {o['qty']} at ≤ ₹{o['sl_trigger']:,.2f}."
+        _upd(conn, oid, sl_status="failed", note=f"{name}: {e}"[:300])
+        return f"⚠️ The {name} sell trigger was NOT accepted ({e}). Set it in Kite yourself."
+    _upd(conn, oid, sl_gtt_id=gid, sl_status="active")
+    parts = []
+    if o["sl_trigger"]:
+        parts.append(f"stop-loss ≤ ₹{o['sl_trigger']:,.2f}")
+    if o["tgt_trigger"]:
+        parts.append(f"target ≥ ₹{o['tgt_trigger']:,.2f}")
+    return f"🛡 {name[0].upper() + name[1:]} placed (GTT {gid}): SELL {o['qty']} at " + " or ".join(parts) + "."
 
 
 def _delete(kite, gtt_id: int | None) -> str | None:
@@ -650,28 +725,104 @@ def sync(conn: sqlite3.Connection, kite, now: datetime | None = None) -> list[st
                 g = kite.gtt(o["sl_gtt_id"])
                 st = g.get("status")
                 if st == "triggered":
+                    hit_target = _fired_leg(g, o) == "target"
+                    what = "target" if hit_target else "stop-loss"
+                    lim = o["tgt_limit"] if hit_target else o["sl_limit"]
                     ost, why = _trigger_result(g)
                     if ost and ost.lower() in ("rejected", "failed", "cancelled"):
                         _upd(conn, oid, sl_status="failed", note=(why or ost)[:300])
-                        msgs.append(f"⚠️ #{oid} {sym}: stop-loss fired but the sell was {ost.lower()}"
+                        msgs.append(f"⚠️ #{oid} {sym}: {what} fired but the sell was {ost.lower()}"
                                     f"{': ' + why if why else ''}. Check Kite now.")
                         continue
                     price = kite.sold_price_today(sym)
-                    _upd(conn, oid, status="stopped", sl_status="triggered")
+                    _upd(conn, oid, status="target" if hit_target else "stopped", sl_status="triggered")
                     conn.execute("INSERT INTO real_trades(pick_id,symbol,side,qty,price,traded_at,note) "
                                  "VALUES(?,?,?,?,?,?,?)", (o["pick_id"], sym, "sell", o["qty"],
-                                                           price or o["sl_limit"], iso_utc(),
-                                                           f"stop-loss gtt #{oid}" + ("" if price else " (≈limit)")))
+                                                           price or lim, iso_utc(),
+                                                           f"{what} gtt #{oid}" + ("" if price else " (≈limit)")))
                     conn.commit()
-                    msgs.append(f"🛑 #{oid} {sym}: stop-loss fired, sell limit ₹{o['sl_limit']:,.2f} sent"
+                    icon = "🎯" if hit_target else "🛑"
+                    msgs.append(f"{icon} #{oid} {sym}: {what} fired, sell limit ₹{lim:,.2f} sent"
                                 + (f", sold @ ₹{price:,.2f}" if price else "") + ". Check Kite for the fill.")
                 elif st in ("cancelled", "deleted", "expired", "disabled", "rejected"):
                     _upd(conn, oid, status="closed", sl_status=st)
-                    msgs.append(f"ℹ️ #{oid} {sym}: stop-loss trigger is {st} in Kite. Position is no longer "
+                    msgs.append(f"ℹ️ #{oid} {sym}: {_exit_name(o)} trigger is {st} in Kite. Position is no longer "
                                 "protected by this bot.")
         except KiteError as e:
             log.warning("sync #%s failed: %s", oid, e)
     return msgs
+
+
+def _fired_leg(g: dict, o) -> str:
+    """Which exit fired: 'stop' or 'target'. An OCO's legs are [stop-loss, target]; the fired leg is the
+    one with an order result. A single-leg exit is whichever this order has."""
+    legs = g.get("orders") or []
+    if o["sl_trigger"] and o["tgt_trigger"] and len(legs) >= 2:
+        if legs[1].get("result") and not legs[0].get("result"):
+            return "target"
+        return "stop"
+    return "stop" if o["sl_trigger"] else "target"
+
+
+def oco_preview(conn: sqlite3.Connection, oid: int, kite, tp_pct: float | None = None,
+                cfg: Config | None = None) -> tuple[str, float]:
+    """Text describing how a filled order's stop-loss GTT would be replaced by an OCO (stop-loss + target)."""
+    cfg = cfg or load_config()
+    o = conn.execute("SELECT * FROM kite_orders WHERE id=?", (oid,)).fetchone()
+    if o is None or o["side"] != "BUY":
+        raise OrderError(f"#{oid} isn't a bot buy order (see /orders)")
+    if o["status"] != "filled" or o["sl_status"] != "active" or not o["sl_trigger"]:
+        raise OrderError(f"#{oid} needs to be a filled buy with an active stop-loss (it's {o['status']}, "
+                         f"stop-loss {o['sl_status']})")
+    if o["tgt_trigger"]:
+        raise OrderError(f"#{oid} already has a target (OCO)")
+    pct = tp_pct if tp_pct is not None else cfg.kite.default_target_pct
+    if not pct or pct <= 0 or pct > cfg.kite.max_target_pct:
+        raise OrderError(f"target must be between 0 and {cfg.kite.max_target_pct:g}%")
+    tick = _tick(o)
+    base = o["fill_price"] or o["limit_price"]
+    tgt_limit = tick_round(base * (1 + pct / 100), tick)
+    tgt_trigger = _tick_up(tgt_limit + max(tick, tgt_limit * 0.0005), tick)
+    _, _, last = kite.holding(o["symbol"])
+    if last and tgt_limit < last * (1 + cfg.kite.now_trigger_gap_pct / 100):
+        raise OrderError(f"target ₹{tgt_limit:,.2f} is not above the last price ₹{last:,.2f}; pick a higher %")
+    qty = o["qty"]
+    net = qty * tgt_limit - qty * base - leg_costs(qty * base, "buy", cfg.costs).total \
+        - leg_costs(qty * tgt_limit, "sell", cfg.costs).total
+    text = (f"🔁 <b>Make #{oid} {o['symbol']} an OCO</b>\n"
+            f"Replace stop-loss GTT {o['sl_gtt_id']} with one OCO sell GTT for {qty} shares:\n"
+            f"  🛡 stop-loss ≤ ₹{o['sl_trigger']:,.2f} (unchanged), limit ₹{o['sl_limit']:,.2f}\n"
+            f"  🎯 target ≥ ₹{tgt_trigger:,.2f} (+{pct:g}% from ₹{base:,.2f}), limit ₹{tgt_limit:,.2f} → "
+            f"<b>≈ +₹{net:,.0f}</b> after charges\n"
+            "<i>The new OCO is placed first, then the old stop-loss deleted, so you're never unprotected.</i>")
+    return text, pct
+
+
+def upgrade_to_oco(conn: sqlite3.Connection, oid: int, kite, tp_pct: float, cfg: Config | None = None) -> str:
+    """Swap a filled order's single stop-loss GTT for an OCO with a target. New one first, then delete the old."""
+    cfg = cfg or load_config()
+    o = conn.execute("SELECT * FROM kite_orders WHERE id=?", (oid,)).fetchone()
+    if o is None or o["status"] != "filled" or o["sl_status"] != "active" or o["tgt_trigger"]:
+        return f"#{oid} can't be changed now (it's {o['status'] if o else 'unknown'})."
+    held, _ = kite.held_qty(o["symbol"])
+    if held < o["qty"]:
+        return f"❌ You hold {held} {o['symbol']}, fewer than the order's {o['qty']}. Nothing changed."
+    tick = _tick(o)
+    base = o["fill_price"] or o["limit_price"]
+    tgt_limit = tick_round(base * (1 + tp_pct / 100), tick)
+    tgt_trigger = _tick_up(tgt_limit + max(tick, tgt_limit * 0.0005), tick)
+    _, _, last = kite.holding(o["symbol"])
+    old_id = o["sl_gtt_id"]
+    try:
+        new_id = kite.place_oco(o["symbol"], o["qty"], o["sl_trigger"], o["sl_limit"], tgt_trigger, tgt_limit,
+                                round(last or base, 2), tick)
+    except KiteError as e:
+        return f"❌ Kite rejected the OCO ({e}). Your stop-loss GTT {old_id} is unchanged."
+    _upd(conn, oid, sl_gtt_id=new_id, tgt_trigger=tgt_trigger, tgt_limit=tgt_limit, tgt_pct=tp_pct)
+    err = _delete(kite, old_id)
+    return (f"✅ #{oid} {o['symbol']}: OCO GTT {new_id} placed (stop-loss ≤ ₹{o['sl_trigger']:,.2f} or target ≥ "
+            f"₹{tgt_trigger:,.2f}); old stop-loss GTT {old_id} deleted."
+            + (f"\n⚠️ {err}. Until then both are active: delete GTT {old_id} in Kite." if err else ""))
 
 
 def _maybe_expire_buy(conn: sqlite3.Connection, o, kite, now: datetime) -> str | None:
@@ -742,7 +893,10 @@ def orders_text(conn: sqlite3.Connection, limit: int = 10) -> str:
         return f"{head}\nNo orders yet. Example: <code>buy HAL ₹2500 @now sl 6%</code>"
     lines = [head, "<b>Recent orders</b>"]
     for o in rows:
-        sl = f" · SL ₹{o['sl_trigger']:,.2f} ({o['sl_status'] or '-'})" if o["sl_trigger"] else " · no SL"
+        sl = f" · SL ₹{o['sl_trigger']:,.2f}" if o["sl_trigger"] else " · no SL"
+        if o["tgt_trigger"]:
+            sl += f" / target ₹{o['tgt_trigger']:,.2f}"
+        sl += f" ({o['sl_status'] or '-'})"
         fill = f" filled ₹{o['fill_price']:,.2f}" if o["fill_price"] else ""
         if o["side"] == "SELL":
             sl = ""
@@ -904,12 +1058,12 @@ def gtt_list_text(conn: sqlite3.Connection, gtts: list[dict], show_all: bool = F
     """All GTTs in the Kite account (read-only view). Bot-created ones are tagged with their order #."""
     from html import escape
     ours: dict[int, tuple[int, str]] = {}
-    for r in conn.execute("SELECT id, side, buy_gtt_id, sl_gtt_id FROM kite_orders "
+    for r in conn.execute("SELECT id, side, buy_gtt_id, sl_gtt_id, tgt_trigger FROM kite_orders "
                           "WHERE buy_gtt_id IS NOT NULL OR sl_gtt_id IS NOT NULL"):
         if r["buy_gtt_id"]:
             ours[int(r["buy_gtt_id"])] = (r["id"], "target" if r["side"] == "SELL" else "buy")
         if r["sl_gtt_id"]:
-            ours[int(r["sl_gtt_id"])] = (r["id"], "stop-loss")
+            ours[int(r["sl_gtt_id"])] = (r["id"], "stop-loss + target" if r["tgt_trigger"] else "stop-loss")
     rows = [g for g in gtts if show_all or g.get("status") == "active"]
     rows.sort(key=lambda g: g.get("created_at") or "", reverse=True)
     if not rows:

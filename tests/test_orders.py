@@ -28,6 +28,18 @@ class FakeKite:
         self.gtt_state[self.next_id] = {"status": "active", "orders": [{}]}
         return self.next_id
 
+    def place_oco(self, symbol, qty, sl_trigger, sl_limit, tgt_trigger, tgt_limit, last_price, tick=0.05):
+        if self.reject_sell:
+            raise KiteError("InputException: nope")
+        assert sl_trigger < tgt_trigger and sl_limit <= sl_trigger and tgt_limit <= tgt_trigger
+        self.next_id += 1
+        self.placed.append((self.next_id, "OCO", symbol, qty, (sl_trigger, tgt_trigger), (sl_limit, tgt_limit)))
+        self.gtt_state[self.next_id] = {"status": "active", "orders": [{}, {}]}
+        return self.next_id
+
+    def holding(self, symbol):
+        return self.held, 100.0, 100.0
+
     def gtt(self, tid):
         return self.gtt_state[tid]
 
@@ -111,8 +123,8 @@ def test_confirm_places_buy_and_sl_once(conn, cfg):
     k = FakeKite()
     oid = _draft(conn, cfg)
     msg = confirm(conn, oid, k, cfg=cfg)
-    assert "Buy trigger placed" in msg and "Stop-loss trigger placed" in msg
-    assert [p[1] for p in k.placed] == ["BUY", "SELL"]
+    assert "Buy trigger placed" in msg and "Stop-loss + target (OCO) placed" in msg
+    assert [p[1] for p in k.placed] == ["BUY", "OCO"]
     assert "already" in confirm(conn, oid, k, cfg=cfg)        # double tap
     assert len(k.placed) == 2
 
@@ -146,7 +158,7 @@ def test_sl_deferred_when_already_held_then_placed_on_fill(conn, cfg):
     assert any("fired" in m for m in msgs)
     k.held, k.day_price = 15, 119.9
     msgs = sync(conn, k, t)
-    assert any("bought 10 @ ₹119.90" in m for m in msgs) and any("Stop-loss trigger placed" in m for m in msgs)
+    assert any("bought 10 @ ₹119.90" in m for m in msgs) and any("(OCO) placed" in m for m in msgs)
     assert conn.execute("SELECT side, qty, price FROM real_trades").fetchone()["price"] == 119.9
 
 
@@ -376,3 +388,70 @@ def test_filled_buy_keeps_its_stop_loss_after_cutoff(conn, cfg):
     row = conn.execute("SELECT status, sl_status FROM kite_orders WHERE id=?", (oid,)).fetchone()
     assert (row["status"], row["sl_status"]) == ("filled", "active")
     assert sl_id not in k.deleted and k.gtt_state[sl_id]["status"] == "active"
+
+
+
+# ---------------------------------------------------------------- OCO: stop-loss + target in one GTT
+def test_parse_target():
+    assert parse_order("buy HAL ₹2500 @now sl 6% tp 20%").tp_pct == 20
+    assert parse_order("buy HAL 2 @4210 tp 5000").tp_price == 5000
+    assert parse_order("buy HAL ₹2500 tp none").no_tp
+
+
+def test_plan_target_default_explicit_and_none(cfg):
+    p = build_plan(parse_order("buy PNB ₹2500 @120"), "PNB", 132.0, cfg, tick=0.01)
+    assert p.tgt_pct == cfg.kite.default_target_pct
+    assert p.tgt_limit == pytest.approx(120 * (1 + cfg.kite.default_target_pct / 100), abs=0.01)
+    assert p.tgt_trigger > p.tgt_limit                        # fires above the limit, so the sell fills
+    p = build_plan(parse_order("buy PNB ₹2500 @120 tp 20%"), "PNB", 132.0, cfg, tick=0.01)
+    assert p.tgt_limit == pytest.approx(144.0, abs=0.01)
+    with pytest.raises(OrderError):                           # 10% of 120 = 132, not above the market
+        build_plan(parse_order("buy PNB ₹2500 @120 tp 10%"), "PNB", 132.0, cfg, tick=0.01)
+    p = build_plan(parse_order("buy PNB ₹2500 @120 tp none"), "PNB", 132.0, cfg, tick=0.01)
+    assert p.tgt_trigger is None
+    with pytest.raises(OrderError):                           # target below the market
+        build_plan(parse_order("buy PNB ₹2500 @120 tp 125"), "PNB", 132.0, cfg, tick=0.01)
+
+
+def test_sl_only_and_target_only_use_single_gtts(conn, cfg):
+    k = FakeKite()
+    confirm(conn, _draft(conn, cfg, sl_price=114, no_tp=True), k, cfg=cfg)
+    confirm(conn, _draft(conn, cfg, no_sl=True, tp_pct=20), k, cfg=cfg)
+    assert [p[1] for p in k.placed] == ["BUY", "SELL", "BUY", "SELL"]
+    assert k.placed[3][4] > 140                               # the target-only sell is above the market
+
+
+def test_oco_fire_reports_which_leg(conn, cfg):
+    k = FakeKite()
+    for leg, status, icon in ((1, "target", "🎯"), (0, "stopped", "🛑")):
+        oid = _draft(conn, cfg)
+        confirm(conn, oid, k, cfg=cfg)
+        buy_id, oco_id = k.placed[-2][0], k.placed[-1][0]
+        conn.execute("UPDATE kite_orders SET status='filled', fill_price=120 WHERE id=?", (oid,))
+        conn.commit()
+        legs = [{}, {}]
+        legs[leg] = {"result": {"order_result": {"status": "success"}}}
+        k.gtt_state[oco_id] = {"status": "triggered", "orders": legs}
+        msgs = sync(conn, k, now_ist().replace(hour=11))
+        assert any(m.startswith(icon) for m in msgs), msgs
+        assert conn.execute("SELECT status FROM kite_orders WHERE id=?", (oid,)).fetchone()["status"] == status
+
+
+def test_upgrade_filled_stop_loss_to_oco(conn, cfg):
+    from assistant.orders import oco_preview, upgrade_to_oco
+    k = FakeKite()
+    oid = _draft(conn, cfg, sl_price=114, no_tp=True)
+    confirm(conn, oid, k, cfg=cfg)
+    old_sl = k.placed[-1][0]
+    conn.execute("UPDATE kite_orders SET status='filled', fill_price=119.5 WHERE id=?", (oid,))
+    conn.commit()
+    k.held = 10
+    text, pct = oco_preview(conn, oid, k)
+    assert "OCO" in text and pct == cfg.kite.default_target_pct
+    msg = upgrade_to_oco(conn, oid, k, pct)
+    assert "OCO GTT" in msg and old_sl in k.deleted
+    assert k.placed[-1][1] == "OCO"                           # new one placed before the old was deleted
+    row = conn.execute("SELECT sl_gtt_id, tgt_trigger FROM kite_orders WHERE id=?", (oid,)).fetchone()
+    assert row["sl_gtt_id"] == k.placed[-1][0] and row["tgt_trigger"] > 119.5
+    with pytest.raises(OrderError):
+        oco_preview(conn, oid, k)                             # already has a target

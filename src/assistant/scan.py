@@ -16,6 +16,7 @@ from html import escape
 import pandas as pd
 
 from . import market_data as md
+from .orders import tp_label
 from . import news as newsmod
 from .config import Config
 from .signals import rsi, sma
@@ -218,7 +219,7 @@ def run_scan(conn: sqlite3.Connection, cfg: Config, now: datetime | None = None)
     for i, c in enumerate(picks, 1):
         text = pick_text(i, c, cfg).rsplit("\n", 1)[0]  # drop the paper-entry line
         msgs.append((text, [[(f"🛒 Buy {c.stock.symbol} ₹{cap:,.0f} @now · SL {cfg.kite.default_sl_pct:g}%"
-                              + (f" · TP {cfg.kite.default_target_pct:g}%" if cfg.kite.default_target_pct else ""),
+                              + tp_label(cfg.kite),
                               f"ordsym:{c.stock.symbol}")]]))
 
     # holdings (needs today's Kite login)

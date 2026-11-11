@@ -192,11 +192,11 @@ redirect URL `http://127.0.0.1:8765/kite`, then put `KITE_API_KEY` and `KITE_API
 | Message | Meaning |
 |---|---|
 | `buy HAL 2 @4210 sl 3950` | 2 shares, limit 4210, stop-loss trigger 3950 |
-| `buy PNB ₹2500 @now sl 6%` | as many shares as ₹2,500 buys, "now", stop-loss 6% below, default 25% target |
+| `buy PNB ₹2500 @now sl 6%` | as many shares as ₹2,500 buys, "now", stop-loss 6% below, per-stock target |
 | `buy PNB ₹2500 @now sl 6% tp 20%` | same, with a 20% target (`tp 160` = a price, `tp none` = no target) |
 | `buy ₹2500` | today's last approved pick, now, default 6% stop-loss |
 | `... sl none` | no stop-loss |
-| `/oco 5` or `/oco 5 20%` | add a target to filled order 5: its stop-loss GTT is replaced by an OCO (preview, then Confirm) |
+| `/oco 5` (per-stock target) or `/oco 5 10%` | add a target to filled order 5: its stop-loss GTT is replaced by an OCO (preview, then Confirm) |
 | 🛒 button after Approve | ₹2,500 now with the default stop-loss |
 | `sell JPL all @1455` | target sell of all your JPL at ₹1,455 (trigger just above, so it fills) |
 | `sell JPL 12 profit 4000` | price that keeps ₹4,000 after sell charges, from Kite's average buy price |
@@ -213,8 +213,15 @@ redirect URL `http://127.0.0.1:8765/kite`, then put `KITE_API_KEY` and `KITE_API
   cancels the other leg, so there's never a second sell waiting for shares you've already sold.
   - The stop-loss leg's limit is 1% below its trigger, so it fills on a fast fall.
   - The target leg's trigger sits just above its limit, so it fills once it fires.
-  - The default target is `kite.default_target_pct` (25%). In the 5-year study, every target lowered the
-    average result (see "Exit-rule study"), so it's set wide; use `tp none` to skip it.
+  - **The default target is per stock** (`kite.target_mode: auto`): the rise that stock reached within the
+    hold period (40 trading days) in half of all windows over the last 5 years, clamped to 4–25%. A quiet
+    large-cap like GAIL gets ~8–9%; a volatile stock gets more. The Confirm message shows how an OCO with that
+    target and stop would have played out from every past day (target first / stop first / neither).
+    It's history, not a forecast. `target_mode: fixed` uses `default_target_pct` (10%); `none` = stop-loss only.
+    A typed `tp 20%`, `tp 160` or `tp none` always wins. Per-stock targets are not backtested; fixed targets
+    lowered the average in the study ("Exit-rule study").
+  - The Confirm and `/oco` messages show **invested** (shares + buy charges) and, for each exit, **you get**
+    (sale value minus sell charges) and the profit/loss after all charges.
   - With only a stop-loss or only a target, it's a single GTT.
   - It's placed together with the buy. If you already hold that stock, it waits until the new buy fills,
   so it can never sell shares you bought earlier.

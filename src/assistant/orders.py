@@ -158,8 +158,32 @@ def parse_order(text: str) -> OrderRequest | None:
 
 
 # ------------------------------------------------------------------ planning
+def tp_label(k) -> str:
+    """Button suffix describing the default target."""
+    if k.target_mode == "auto":
+        return " · TP per-stock"
+    if k.target_mode == "fixed" and k.default_target_pct:
+        return f" · TP {k.default_target_pct:g}%"
+    return ""
+
+
+def plan_sl_pct(req: OrderRequest, ltp: float, cfg: Config) -> float | None:
+    """The stop-loss % this request will use (for the target history), before the plan is built."""
+    if req.no_sl:
+        return None
+    if req.sl_price is not None:
+        return max((1 - req.sl_price / ltp) * 100, 0.5)
+    return req.sl_pct if req.sl_pct is not None else cfg.kite.default_sl_pct
+
+
+def wants_auto_target(req: OrderRequest, cfg: Config) -> bool:
+    return (not req.no_tp and req.tp_price is None and req.tp_pct is None
+            and cfg.kite.target_mode == "auto")
+
+
 def build_plan(req: OrderRequest, symbol: str, ltp: float, cfg: Config | None = None,
-               tick: float | None = None) -> Plan:
+               tick: float | None = None, target=None) -> Plan:
+    """`target`: a targets.TargetStats for this stock (auto target, and the history line in the message)."""
     cfg = cfg or load_config()
     k = cfg.kite
     if not ltp > 0:
@@ -214,18 +238,29 @@ def build_plan(req: OrderRequest, symbol: str, ltp: float, cfg: Config | None = 
             raise OrderError("stop-loss is too close to the buy price (< 0.5%)")
         sl_limit = rnd(sl_trigger * (1 - k.sl_limit_buffer_pct / 100))
     tgt_trigger = tgt_limit = tgt_pct = None
-    if not req.no_tp and (req.tp_price is not None or req.tp_pct or k.default_target_pct):
+    auto = wants_auto_target(req, cfg)
+    default_tp = None if k.target_mode == "none" else k.default_target_pct
+    if not req.no_tp and (req.tp_price is not None or req.tp_pct or auto or default_tp):
         if req.tp_price is not None:
             tgt_limit = rnd(req.tp_price)
             tgt_pct = (tgt_limit / limit - 1) * 100
         else:
-            tgt_pct = req.tp_pct if req.tp_pct is not None else k.default_target_pct
+            if req.tp_pct is not None:
+                tgt_pct = req.tp_pct
+            elif auto and target is not None:
+                tgt_pct = target.pct
+            else:
+                tgt_pct = default_tp
+                if auto:
+                    notes.append(f"not enough price history for a per-stock target; using {tgt_pct:g}%")
             tgt_limit = rnd(limit * (1 + tgt_pct / 100))
         if tgt_limit <= limit or tgt_limit < ltp * (1 + k.now_trigger_gap_pct / 100):
             raise OrderError(f"target ₹{tgt_limit:,.2f} must be above both the buy price and the last price")
         if tgt_pct > k.max_target_pct:
             raise OrderError(f"target {tgt_pct:.1f}% above is more than the {k.max_target_pct:g}% limit")
         tgt_trigger = _tick_up(tgt_limit + max(tick, tgt_limit * 0.0005), tick)  # fires above the limit -> fills
+        if target is not None:
+            notes.insert(0, target.line(sl_pct))
     return Plan(symbol, qty, mode, round(ltp, 2), trigger, limit, sl_trigger, sl_limit,
                 round(sl_pct, 2) if sl_pct is not None else None, notes, tick,
                 tgt_trigger, tgt_limit, round(tgt_pct, 2) if tgt_pct is not None else None)
@@ -437,7 +472,8 @@ def draft_text(conn: sqlite3.Connection, oid: int, cfg: Config | None = None) ->
     lines = [f"🛒 <b>Confirm order #{oid}</b>",
              f"BUY <b>{o['symbol']}</b> × {o['qty']}  (NSE · delivery/CNC · limit)",
              how,
-             f"Value ≈ ₹{value:,.0f} (cap ₹{cfg.kite.max_order_value:,.0f}) · buy charges ≈ ₹{charges:,.2f}",
+             f"💵 Invested ≈ <b>₹{value + charges:,.0f}</b> (₹{value:,.0f} shares + ₹{charges:,.2f} charges; "
+             f"cap ₹{cfg.kite.max_order_value:,.0f})",
              *sl]
     if o["note"]:
         lines.append(f"<i>Note: {o['note']}</i>")
@@ -452,6 +488,12 @@ def _net_at(o, sell_price: float, cfg: Config, buy_charges: float) -> float:
     return v - o["qty"] * o["limit_price"] - buy_charges - leg_costs(v, "sell", cfg.costs).total
 
 
+def _proceeds(qty: int, price: float, cfg: Config) -> float:
+    """Money credited for selling `qty` at `price`, after sell charges."""
+    v = qty * price
+    return v - leg_costs(v, "sell", cfg.costs).total
+
+
 def _exit_lines(o, cfg: Config, value: float, buy_charges: float) -> list[str]:
     sl, tg = o["sl_trigger"], o["tgt_trigger"]
     if not sl and not tg:
@@ -461,15 +503,18 @@ def _exit_lines(o, cfg: Config, value: float, buy_charges: float) -> list[str]:
         out.append("Exit: <b>one OCO sell GTT</b> (whichever price is hit first sells; the other is cancelled)")
     if sl:
         out.append(f"  🛡 stop-loss ≤ ₹{sl:,.2f} (−{o['sl_pct']:.1f}%), sell limit ₹{o['sl_limit']:,.2f} → "
+                   f"you get ≈ ₹{_proceeds(o['qty'], o['sl_limit'], cfg):,.0f} · "
                    f"<b>≈ −₹{abs(_net_at(o, o['sl_limit'], cfg, buy_charges)):,.0f}</b>")
     else:
         out.append("  🛡 stop-loss: <b>none</b>")
     if tg:
         out.append(f"  🎯 target ≥ ₹{tg:,.2f} (+{o['tgt_pct']:.1f}%), sell limit ₹{o['tgt_limit']:,.2f} → "
+                   f"you get ≈ ₹{_proceeds(o['qty'], o['tgt_limit'], cfg):,.0f} · "
                    f"<b>≈ +₹{_net_at(o, o['tgt_limit'], cfg, buy_charges):,.0f}</b>")
     else:
         out.append("  🎯 target: none")
-    out.append("  <i>(₹ after all charges, if the buy fills at its limit)</i>")
+    out.append("  <i>(“you get” = sale value minus sell charges; ± = profit/loss after all charges, "
+               "if the buy fills at its limit)</i>")
     return out
 
 
@@ -479,7 +524,8 @@ def _sell_draft_text(o, cfg: Config) -> str:
              f"SELL <b>{o['symbol']}</b> × {o['qty']}  (NSE · delivery/CNC · limit)",
              f"Trigger ₹{o['trigger_price']:,.2f} → sell at ₹{o['limit_price']:,.2f} (last ₹{o['ltp']:,.2f}, "
              f"+{(o['limit_price'] / o['ltp'] - 1) * 100:.1f}%)",
-             f"Value ≈ ₹{value:,.0f} · sell charges ≈ ₹{leg_costs(value, 'sell', cfg.costs).total:,.2f}"]
+             f"Sale value ≈ ₹{value:,.0f} · sell charges ≈ ₹{leg_costs(value, 'sell', cfg.costs).total:,.2f} · "
+             f"you get ≈ <b>₹{_proceeds(o['qty'], o['limit_price'], cfg):,.0f}</b>"]
     if o["note"]:
         lines.append(o["note"])
     lines.append("<i>Fires when the price is already above your sell price, so it fills straight away. "
@@ -766,7 +812,8 @@ def _fired_leg(g: dict, o) -> str:
 
 def oco_preview(conn: sqlite3.Connection, oid: int, kite, tp_pct: float | None = None,
                 cfg: Config | None = None) -> tuple[str, float]:
-    """Text describing how a filled order's stop-loss GTT would be replaced by an OCO (stop-loss + target)."""
+    """Text describing how a filled order's stop-loss GTT would be replaced by an OCO (stop-loss + target).
+    No % given: the per-stock target (target_mode auto), else default_target_pct."""
     cfg = cfg or load_config()
     o = conn.execute("SELECT * FROM kite_orders WHERE id=?", (oid,)).fetchone()
     if o is None or o["side"] != "BUY":
@@ -776,26 +823,45 @@ def oco_preview(conn: sqlite3.Connection, oid: int, kite, tp_pct: float | None =
                          f"stop-loss {o['sl_status']})")
     if o["tgt_trigger"]:
         raise OrderError(f"#{oid} already has a target (OCO)")
-    pct = tp_pct if tp_pct is not None else cfg.kite.default_target_pct
+    from .targets import suggest_target
+    base = o["fill_price"] or o["limit_price"]
+    sl_pct_now = (1 - o["sl_trigger"] / base) * 100
+    stats = None
+    if tp_pct is None and cfg.kite.target_mode == "auto":
+        stats = suggest_target(o["symbol"], cfg, sl_pct_now)
+        pct = stats.pct if stats else cfg.kite.default_target_pct
+    else:
+        pct = tp_pct if tp_pct is not None else cfg.kite.default_target_pct
+        stats = suggest_target(o["symbol"], cfg, sl_pct_now, fixed_pct=pct)
     if not pct or pct <= 0 or pct > cfg.kite.max_target_pct:
         raise OrderError(f"target must be between 0 and {cfg.kite.max_target_pct:g}%")
     tick = _tick(o)
-    base = o["fill_price"] or o["limit_price"]
     tgt_limit = tick_round(base * (1 + pct / 100), tick)
     tgt_trigger = _tick_up(tgt_limit + max(tick, tgt_limit * 0.0005), tick)
     _, _, last = kite.holding(o["symbol"])
     if last and tgt_limit < last * (1 + cfg.kite.now_trigger_gap_pct / 100):
         raise OrderError(f"target ₹{tgt_limit:,.2f} is not above the last price ₹{last:,.2f}; pick a higher %")
     qty = o["qty"]
-    net = qty * tgt_limit - qty * base - leg_costs(qty * base, "buy", cfg.costs).total \
-        - leg_costs(qty * tgt_limit, "sell", cfg.costs).total
-    text = (f"🔁 <b>Make #{oid} {o['symbol']} an OCO</b>\n"
-            f"Replace stop-loss GTT {o['sl_gtt_id']} with one OCO sell GTT for {qty} shares:\n"
-            f"  🛡 stop-loss ≤ ₹{o['sl_trigger']:,.2f} (unchanged), limit ₹{o['sl_limit']:,.2f}\n"
-            f"  🎯 target ≥ ₹{tgt_trigger:,.2f} (+{pct:g}% from ₹{base:,.2f}), limit ₹{tgt_limit:,.2f} → "
-            f"<b>≈ +₹{net:,.0f}</b> after charges\n"
-            "<i>The new OCO is placed first, then the old stop-loss deleted, so you're never unprotected.</i>")
-    return text, pct
+    buy_ch = leg_costs(qty * base, "buy", cfg.costs).total
+    invested = qty * base + buy_ch
+
+    def pnl(price: float) -> float:
+        return _proceeds(qty, price, cfg) - invested
+    sl_pnl, tg_pnl = pnl(o["sl_limit"]), pnl(tgt_limit)
+    lines = [f"🔁 <b>Make #{oid} {o['symbol']} an OCO</b>",
+             f"Replace stop-loss GTT {o['sl_gtt_id']} with one OCO sell GTT for {qty} shares:",
+             f"💵 Invested ≈ <b>₹{invested:,.0f}</b> ({qty} × ₹{base:,.2f} + ₹{buy_ch:,.2f} charges)"
+             + (f" · now ≈ ₹{qty * last:,.0f}" if last else ""),
+             f"  🛡 stop-loss ≤ ₹{o['sl_trigger']:,.2f} (unchanged), limit ₹{o['sl_limit']:,.2f} → "
+             f"you get ≈ ₹{_proceeds(qty, o['sl_limit'], cfg):,.0f} · <b>≈ {'+' if sl_pnl >= 0 else '−'}"
+             f"₹{abs(sl_pnl):,.0f}</b>",
+             f"  🎯 target ≥ ₹{tgt_trigger:,.2f} (+{pct:g}% from ₹{base:,.2f}), limit ₹{tgt_limit:,.2f} → "
+             f"you get ≈ ₹{_proceeds(qty, tgt_limit, cfg):,.0f} · <b>≈ +₹{tg_pnl:,.0f}</b>",
+             "  <i>(“you get” = sale value minus sell charges; ± = profit/loss after all charges)</i>"]
+    if stats:
+        lines.append(stats.line(round(sl_pct_now, 1)))
+    lines.append("<i>The new OCO is placed first, then the old stop-loss deleted, so you're never unprotected.</i>")
+    return "\n".join(lines), pct
 
 
 def upgrade_to_oco(conn: sqlite3.Connection, oid: int, kite, tp_pct: float, cfg: Config | None = None) -> str:

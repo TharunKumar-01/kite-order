@@ -399,6 +399,8 @@ def test_parse_target():
 
 
 def test_plan_target_default_explicit_and_none(cfg):
+    cfg = cfg.model_copy(update={"kite": cfg.kite.model_copy(update={"target_mode": "fixed",
+                                                                     "default_target_pct": 25.0})})
     p = build_plan(parse_order("buy PNB ₹2500 @120"), "PNB", 132.0, cfg, tick=0.01)
     assert p.tgt_pct == cfg.kite.default_target_pct
     assert p.tgt_limit == pytest.approx(120 * (1 + cfg.kite.default_target_pct / 100), abs=0.01)
@@ -437,7 +439,7 @@ def test_oco_fire_reports_which_leg(conn, cfg):
         assert conn.execute("SELECT status FROM kite_orders WHERE id=?", (oid,)).fetchone()["status"] == status
 
 
-def test_upgrade_filled_stop_loss_to_oco(conn, cfg):
+def test_upgrade_filled_stop_loss_to_oco(conn, cfg, monkeypatch):
     from assistant.orders import oco_preview, upgrade_to_oco
     k = FakeKite()
     oid = _draft(conn, cfg, sl_price=114, no_tp=True)
@@ -446,8 +448,11 @@ def test_upgrade_filled_stop_loss_to_oco(conn, cfg):
     conn.execute("UPDATE kite_orders SET status='filled', fill_price=119.5 WHERE id=?", (oid,))
     conn.commit()
     k.held = 10
+    import assistant.targets as targets
+    stats = targets.TargetStats("PNB", 40, 12.5, 0.5, 0.4, 0.3, 0.3, 5, 1000)
+    monkeypatch.setattr(targets, "suggest_target", lambda *a, **kw: stats)
     text, pct = oco_preview(conn, oid, k)
-    assert "OCO" in text and pct == cfg.kite.default_target_pct
+    assert "OCO" in text and pct == 12.5 and "Invested" in text and "you get" in text and "40%" in text
     msg = upgrade_to_oco(conn, oid, k, pct)
     assert "OCO GTT" in msg and old_sl in k.deleted
     assert k.placed[-1][1] == "OCO"                           # new one placed before the old was deleted
@@ -455,3 +460,31 @@ def test_upgrade_filled_stop_loss_to_oco(conn, cfg):
     assert row["sl_gtt_id"] == k.placed[-1][0] and row["tgt_trigger"] > 119.5
     with pytest.raises(OrderError):
         oco_preview(conn, oid, k)                             # already has a target
+
+
+def test_auto_target_uses_stock_history_and_falls_back(cfg):
+    from assistant.targets import TargetStats
+    stats = TargetStats("PNB", 40, 15.0, 0.5, 0.42, 0.25, 0.33, 5, 1000)
+    p = build_plan(parse_order("buy PNB ₹2500 @120"), "PNB", 121.0, cfg, tick=0.01, target=stats)
+    assert p.tgt_pct == 15.0 and p.tgt_limit == pytest.approx(138.0, abs=0.01)
+    assert "target first 42%" in p.notes[0]
+    p = build_plan(parse_order("buy PNB ₹2500 @120"), "PNB", 121.0, cfg, tick=0.01, target=None)
+    assert p.tgt_pct == cfg.kite.default_target_pct and "not enough price history" in p.notes[-1]
+    p = build_plan(parse_order("buy PNB ₹2500 @120 tp 20%"), "PNB", 121.0, cfg, tick=0.01, target=stats)
+    assert p.tgt_pct == 20                                    # typed target wins over the per-stock one
+
+
+def test_target_outcomes_order_of_hits():
+    import numpy as np
+    from assistant.targets import outcomes
+    close = np.array([100, 100, 100, 100, 100, 100.0])
+    high = np.array([100, 111, 100, 100, 100, 100.0])        # day 1: +11%
+    low = np.array([100, 100, 100, 93, 100, 100.0])          # day 3: -7%
+    reach, tf, sf, ne, n = outcomes(close, high, low, 2, 10, 6)
+    # starts 0..3: s0 sees day1 (+) -> target; s1 sees days2,3 -> stop; s2 sees 3,4 -> stop; s3 sees 4,5 -> neither
+    assert n == 4 and tf == 0.25 and sf == 0.5 and ne == 0.25 and reach == 0.25
+
+
+def test_draft_shows_invested_and_sale_values(conn, cfg):
+    text = draft_text(conn, _draft(conn, cfg, sl_price=114, tp_pct=20), cfg)
+    assert "Invested" in text and text.count("you get") >= 2

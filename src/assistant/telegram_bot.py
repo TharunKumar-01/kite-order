@@ -11,6 +11,7 @@ from datetime import datetime
 import requests
 
 from .config import load_config, load_secrets
+from .orders import tp_label
 from .util import redact
 
 log = logging.getLogger(__name__)
@@ -123,7 +124,7 @@ HELP = (
     "/stop – switch Kite ordering off · /orderson – back on\n\n"
     "<b>Order via Kite GTT</b> (you confirm every order):\n"
     "<code>buy HAL 2 @4210 sl 3950</code>\n"
-    "<code>buy HAL ₹2500 @now sl 6% tp 25%</code>\n"
+    "<code>buy HAL ₹2500 @now sl 6% tp 10%</code>\n"
     "<code>buy ₹2500</code> (last approved pick, now, default SL)\n"
     "<code>sl none</code> / <code>tp none</code> = no stop-loss / no target. Stop-loss + target go in one "
     "OCO sell GTT: whichever price comes first sells, the other is cancelled.\n"
@@ -226,7 +227,7 @@ def run_bot() -> None:
                         f"(Bought elsewhere? <code>bought {esc(sym)} &lt;qty&gt; &lt;price&gt;</code>)",
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
                             f"🛒 Buy ₹{k.max_order_value:,.0f} @now · SL {k.default_sl_pct:g}%"
-                            + (f" · TP {k.default_target_pct:g}%" if k.default_target_pct else ""),
+                            + tp_label(k),
                             callback_data=f"ordnew:{pid}")]]))
             elif result == "duplicate":
                 try:
@@ -386,7 +387,19 @@ def run_bot() -> None:
                              (sym,)).fetchone()
             pick_id = r["id"] if r else None
         ltp = get_ltp(sym)
-        plan = build_plan(req, sym, ltp, tick=kite.tick_size(sym, ltp))
+        from .orders import plan_sl_pct, wants_auto_target
+        from .targets import suggest_target
+        cfg = load_config()
+        sl = plan_sl_pct(req, ltp, cfg)
+        if req.no_tp or (cfg.kite.target_mode == "none" and req.tp_pct is None and req.tp_price is None):
+            target = None
+        elif wants_auto_target(req, cfg):
+            target = suggest_target(sym, cfg, sl)
+        else:
+            fixed = req.tp_pct if req.tp_pct is not None else (
+                (req.tp_price / ltp - 1) * 100 if req.tp_price is not None else cfg.kite.default_target_pct)
+            target = suggest_target(sym, cfg, sl, fixed_pct=fixed)
+        plan = build_plan(req, sym, ltp, cfg, tick=kite.tick_size(sym, ltp), target=target)
         oid = create_draft(conn, plan, pick_id)
         return oid, draft_text(conn, oid)
 

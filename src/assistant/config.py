@@ -106,7 +106,13 @@ class Kite(BaseModel):
     login_port: int = 8765            # redirect URL: http://127.0.0.1:<port>/kite
     max_orders_per_day: int = 2       # confirmed BUY orders per IST day
     default_sl_pct: float = 6.0       # stop-loss when none is given ("sl none" to skip)
-    default_target_pct: float = 25.0  # target leg of the OCO sell, % above the buy price ("tp none" / 0 = no target)
+    default_target_pct: float = 10.0  # fixed target (target_mode "fixed", or fallback when history is missing)
+    target_mode: str = "auto"         # "auto" = per-stock target from its own history; "fixed" = default_target_pct;
+                                      # "none" = stop-loss only unless the message says "tp ..."
+    auto_target_quantile: float = 0.5 # auto: the rise reached in this share of past windows (0.5 = typical best move)
+    auto_target_days: int = 0         # auto: window in trading days (0 = paper.hold_days)
+    auto_target_min_pct: float = 4.0
+    auto_target_max_pct: float = 25.0
     now_trigger_gap_pct: float = 0.3  # "@now": trigger this far above the last price
     now_limit_buffer_pct: float = 0.5 # "@now": limit this far above the trigger so it fills
     sl_limit_buffer_pct: float = 1.0  # stop-loss sell limit this far below its trigger

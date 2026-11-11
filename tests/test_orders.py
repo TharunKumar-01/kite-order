@@ -351,3 +351,28 @@ def test_unfired_buy_and_its_sl_are_deleted_after_cutoff(conn, cfg):
     row = conn.execute("SELECT status, sl_status FROM kite_orders WHERE id=?", (oid,)).fetchone()
     assert (row["status"], row["sl_status"]) == ("expired", "deleted")
     assert sync(conn, k, datetime(2026, 11, 11, 15, 40, tzinfo=ist)) == []     # nothing repeated
+
+
+def test_filled_buy_keeps_its_stop_loss_after_cutoff(conn, cfg):
+    """Expiry only removes buys that never fired. A buy that fired and filled keeps its stop-loss."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    ist = ZoneInfo("Asia/Kolkata")
+    k = FakeKite()
+    oid = _draft(conn, cfg)
+    confirm(conn, oid, k, cfg=cfg)
+    buy_id, sl_id = k.placed[0][0], k.placed[1][0]
+    conn.execute("UPDATE kite_orders SET confirmed_at=? WHERE id=?",
+                 (datetime(2026, 11, 11, 9, 15, tzinfo=ist).isoformat(), oid))
+    conn.commit()
+    k.gtt_state[buy_id] = {"status": "triggered", "updated_at": "2026-11-11 09:20:00",
+                           "orders": [{"result": {"order_result": {"status": "success"}}}]}
+    sync(conn, k, datetime(2026, 11, 11, 9, 25, tzinfo=ist))        # fired
+    k.held = 13                                                      # and filled
+    sync(conn, k, datetime(2026, 11, 11, 9, 30, tzinfo=ist))
+    for t in ((15, 31), (16, 0)):
+        sync(conn, k, datetime(2026, 11, 11, *t, tzinfo=ist))
+    sync(conn, k, datetime(2026, 11, 12, 10, 0, tzinfo=ist))         # next day too
+    row = conn.execute("SELECT status, sl_status FROM kite_orders WHERE id=?", (oid,)).fetchone()
+    assert (row["status"], row["sl_status"]) == ("filled", "active")
+    assert sl_id not in k.deleted and k.gtt_state[sl_id]["status"] == "active"

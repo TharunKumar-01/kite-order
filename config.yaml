@@ -36,6 +36,11 @@ weights:
   sector_tailwind: 0.5
   sector_news: 0.25
 
+tracker:
+  enabled: true             # evening "pick tracker": every morning pick treated as bought at that day's open
+                            # (₹max_position_value each, paper stop + hold), with reasons for the weak ones
+  detail_limit: 25
+
 paper:
   hold_days: 40             # trading days. 5y backtest: 5 days lost to costs; 20-60 days beat Nifty (README)
   stop_loss_pct: 6.0
@@ -126,6 +131,8 @@ llm:
   max_headline_chars: 200
 
 kite:
+  real_orders: false        # MASTER SWITCH. false = paper only: no GTT is ever placed from Telegram (and
+                            # /orderson can't override it). Triggers already in Kite are still tracked.
   # Only GTT triggers are ever sent (regular API orders need a registered static IP).
   max_order_value: 2500     # hard cap per BUY trigger (qty x limit price)
   login_port: 8765          # set the Kite app redirect URL to http://127.0.0.1:8765/kite

@@ -220,6 +220,10 @@ def run_bot() -> None:
                 if result == "recorded" and action == "approve":
                     sym = conn.execute("SELECT symbol FROM picks WHERE id=?", (int(pid),)).fetchone()["symbol"]
                     k = load_config().kite
+                    if not k.real_orders:
+                        await q.message.reply_html("Noted. Every pick is tracked as a paper trade either way; "
+                                                   "the evening summary compares your approved vs rejected picks.")
+                        return
                     await q.message.reply_html(
                         f"Logged for paper trading. To order it in Kite, tap below or type e.g.\n"
                         f"<code>buy {esc(sym)} ₹{k.max_order_value:,.0f} @now sl {k.default_sl_pct:g}%</code> · "
@@ -360,6 +364,9 @@ def run_bot() -> None:
         from .kite import Kite
         from .orders import (OrderError, SellRequest, build_plan, build_sell_plan, create_draft, draft_text,
                              get_ltp, latest_approved_symbol, ordering_enabled)
+        from .orders import PAPER_ONLY_MSG, real_orders_allowed
+        if not real_orders_allowed():
+            raise OrderError(PAPER_ONLY_MSG)
         if not ordering_enabled(conn):
             raise OrderError("ordering is switched off (/stop). Send /orderson to allow it.")
         kite = Kite(conn)  # raises if not logged in today
@@ -551,7 +558,10 @@ def run_bot() -> None:
 
     async def cmd_oco(update: Update, ctx) -> None:
         from .kite import Kite, KiteError
-        from .orders import OrderError, oco_preview
+        from .orders import PAPER_ONLY_MSG, OrderError, oco_preview, real_orders_allowed
+        if not real_orders_allowed():
+            await reply(update, esc(PAPER_ONLY_MSG))
+            return
         args = ctx.args or []
         if not args or not args[0].isdigit():
             await reply(update, "Usage: <code>/oco 5</code> or <code>/oco 5 20%</code> (order numbers: /orders)")
@@ -611,7 +621,10 @@ def run_bot() -> None:
                     + ". Triggers already in Kite stay there: use /orders and /cancel N to remove them.")
 
     async def cmd_orderson(update: Update, ctx) -> None:
-        from .orders import set_ordering
+        from .orders import PAPER_ONLY_MSG, real_orders_allowed, set_ordering
+        if not real_orders_allowed():
+            await reply(update, esc(PAPER_ONLY_MSG) + " Change it on the Mac to allow real orders again.")
+            return
         await with_conn(set_ordering, True)
         await reply(update, "🟢 Kite ordering switched ON. Every order still needs your Confirm tap.")
 

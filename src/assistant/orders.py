@@ -385,8 +385,17 @@ def get_ltp(symbol: str) -> float:
 
 
 # ------------------------------------------------------------------ state helpers
-def ordering_enabled(conn: sqlite3.Connection) -> bool:
-    return kv_get(conn, "orders_disabled") != "1"
+PAPER_ONLY_MSG = ("📒 Paper-only mode: real Kite orders are switched off in config.yaml "
+                  "(kite.real_orders: false). Picks are tracked as paper trades in the evening summary.")
+
+
+def real_orders_allowed(cfg: Config | None = None) -> bool:
+    """Master switch from config.yaml. Can't be turned on from Telegram."""
+    return bool((cfg or load_config()).kite.real_orders)
+
+
+def ordering_enabled(conn: sqlite3.Connection, cfg: Config | None = None) -> bool:
+    return real_orders_allowed(cfg) and kv_get(conn, "orders_disabled") != "1"
 
 
 def set_ordering(conn: sqlite3.Connection, enabled: bool) -> int:
@@ -568,7 +577,10 @@ def confirm(conn: sqlite3.Connection, oid: int, kite, now: datetime | None = Non
     if age > timedelta(seconds=cfg.kite.draft_ttl_seconds):
         _upd(conn, oid, status="stale")
         return "⌛ This confirmation expired (price may have moved). Send the order again."
-    if not ordering_enabled(conn):
+    if not real_orders_allowed(cfg):
+        _upd(conn, oid, status="cancelled", note="paper only")
+        return PAPER_ONLY_MSG
+    if not ordering_enabled(conn, cfg):
         _upd(conn, oid, status="cancelled", note="kill switch")
         return "⛔ Ordering is switched off (/stop). Send /orderson to allow orders again."
     if _orders_today(conn, now) >= cfg.kite.max_orders_per_day:
@@ -867,6 +879,8 @@ def oco_preview(conn: sqlite3.Connection, oid: int, kite, tp_pct: float | None =
 def upgrade_to_oco(conn: sqlite3.Connection, oid: int, kite, tp_pct: float, cfg: Config | None = None) -> str:
     """Swap a filled order's single stop-loss GTT for an OCO with a target. New one first, then delete the old."""
     cfg = cfg or load_config()
+    if not real_orders_allowed(cfg):
+        return PAPER_ONLY_MSG
     o = conn.execute("SELECT * FROM kite_orders WHERE id=?", (oid,)).fetchone()
     if o is None or o["status"] != "filled" or o["sl_status"] != "active" or o["tgt_trigger"]:
         return f"#{oid} can't be changed now (it's {o['status'] if o else 'unknown'})."
@@ -954,7 +968,9 @@ def _sync_sell(conn: sqlite3.Connection, o, kite, now: datetime) -> str | None:
 def orders_text(conn: sqlite3.Connection, limit: int = 10) -> str:
     rows = conn.execute("SELECT * FROM kite_orders WHERE status NOT IN ('draft','stale') "
                         "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-    head = "🟢 Ordering ON" if ordering_enabled(conn) else "⛔ Ordering OFF (/orderson to enable)"
+    head = ("📒 Paper-only mode (real orders off in config.yaml); existing Kite triggers are still tracked"
+            if not real_orders_allowed() else
+            "🟢 Ordering ON" if ordering_enabled(conn) else "⛔ Ordering OFF (/orderson to enable)")
     if not rows:
         return f"{head}\nNo orders yet. Example: <code>buy HAL ₹2500 @now sl 6%</code>"
     lines = [head, "<b>Recent orders</b>"]

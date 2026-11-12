@@ -5,7 +5,31 @@ import pytest
 from assistant.kite import KiteError
 from assistant.orders import (OrderError, OrderRequest, build_plan, cancel_order, confirm, create_draft,
                               draft_text, parse_order, set_ordering, sync)
+from assistant.config import load_config
 from assistant.util import now_ist
+
+
+@pytest.fixture
+def cfg(monkeypatch):
+    """These tests exercise the real-order path, so they switch the config master switch on."""
+    c = load_config()
+    c = c.model_copy(update={"kite": c.kite.model_copy(update={"real_orders": True})})
+    import assistant.orders as orders
+    monkeypatch.setattr(orders, "load_config", lambda *a, **kw: c)
+    return c
+
+
+def test_paper_only_mode_places_nothing(conn, cfg):
+    off = cfg.model_copy(update={"kite": cfg.kite.model_copy(update={"real_orders": False})})
+    k = FakeKite()
+    oid = create_draft(conn, build_plan(OrderRequest(qty=10, price=120, sl_pct=5), "PNB", 126.55, off))
+    msg = confirm(conn, oid, k, cfg=off)
+    assert "Paper-only" in msg and k.placed == []
+    assert conn.execute("SELECT status FROM kite_orders WHERE id=?", (oid,)).fetchone()["status"] == "cancelled"
+
+
+def test_shipped_config_is_paper_only():
+    assert load_config().kite.real_orders is False
 
 
 class FakeKite:

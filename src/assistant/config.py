@@ -52,6 +52,11 @@ class Paper(BaseModel):
     entry_mode: str = "open"
 
 
+class Tracker(BaseModel):
+    enabled: bool = True     # evening "pick tracker": every morning pick treated as bought (paper)
+    detail_limit: int = 25   # most recent picks listed one by one (all are counted in the scorecard)
+
+
 class Costs(BaseModel):
     brokerage_delivery: float = 0.0
     stt_pct: float = 0.1
@@ -102,6 +107,7 @@ class LLM(BaseModel):
 
 
 class Kite(BaseModel):
+    real_orders: bool = False         # master switch: False = paper only, no GTT is ever placed (even /orderson)
     max_order_value: float = 2500     # hard cap per BUY GTT (qty * limit), enforced in kite.py
     login_port: int = 8765            # redirect URL: http://127.0.0.1:<port>/kite
     max_orders_per_day: int = 2       # confirmed BUY orders per IST day
@@ -149,6 +155,7 @@ class Config(BaseModel):
     llm: LLM = LLM()
     kite: Kite = Kite()
     review: Review = Review()
+    tracker: Tracker = Tracker()
 
     @property
     def tz(self) -> ZoneInfo:

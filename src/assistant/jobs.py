@@ -218,7 +218,7 @@ def evening_job(conn: sqlite3.Connection, cfg: Config, run_date: date, dry_run: 
     if not is_trading_day(run_date, conn):
         return "skipped"
     bench_t = cfg.market.benchmark
-    since = run_date - timedelta(days=45)
+    since = run_date - timedelta(days=max(45, int(cfg.paper.hold_days * 1.6) + 10))  # covers the tracker window
     pick_rows = conn.execute("SELECT * FROM picks WHERE run_date>=? AND run_date<=? ORDER BY run_date, rank",
                              (since.isoformat(), run_date.isoformat())).fetchall()
     all_approved = conn.execute("SELECT * FROM picks WHERE status='approved' AND run_date<=?",
@@ -285,7 +285,14 @@ def evening_job(conn: sqlite3.Connection, cfg: Config, run_date: date, dry_run: 
     save_simulation(conn, sim)
 
     nifty_ret = float((bench["close"].iloc[-1] / bench["close"].iloc[-2] - 1) * 100) if len(bench) >= 2 else None
-    text = evening_text(conn, cfg, run_date, todays, nifty_ret, sim)
+    tracker_block = None
+    if cfg.tracker.enabled:
+        from . import tracker
+        tracked = tracker.track(conn, cfg, prices, bench, since, run_date)
+        tracker_block = tracker.tracker_text(tracked, cfg, run_date,
+                                             tracker.negative_news(tracked, cfg) if not dry_run else None,
+                                             cfg.tracker.detail_limit)
+    text = evening_text(conn, cfg, run_date, todays, nifty_ret, sim, tracker_block)
     paper_eq = float(sim.equity.iloc[-1]) if not sim.equity.empty else cfg.capital_total
     nifty_eq = float(sim.nifty_equity.iloc[-1]) if not sim.nifty_equity.empty else None
     conn.execute("""INSERT INTO daily_summary(date,text,nifty_ret,paper_equity,nifty_equity,created_at)
@@ -298,9 +305,11 @@ def evening_job(conn: sqlite3.Connection, cfg: Config, run_date: date, dry_run: 
     return "done"
 
 
-def evening_text(conn, cfg: Config, run_date: date, todays, nifty_ret, sim) -> str:
+def evening_text(conn, cfg: Config, run_date: date, todays, nifty_ret, sim, tracker_block: str | None = None) -> str:
     lines = [f"<b>🌆 Evening summary – {run_date.strftime('%a %d %b %Y')}</b>",
              f"Nifty today: {reports.fmt_pct(nifty_ret)}"]
+    if tracker_block:
+        lines += ["", tracker_block]
     if todays:
         lines.append("")
         lines.append("<b>Today's picks</b> (gap = prev close→open, post-open = open→close)")

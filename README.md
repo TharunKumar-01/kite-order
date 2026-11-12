@@ -14,6 +14,23 @@ A local macOS tool that screens NSE stocks before the market opens and sends up 
 | ≥16:30 | Evening run: open, 09:45 price and close for today's picks; gap vs post-open move; paper portfolio net of costs; hit rate vs Nifty at 1/3/5 days. If the Mac was asleep, it catches up before the next pre-market run. |
 | Saturday | Weekly report broken down by sector, by rule, and approved vs rejected picks. |
 
+
+## Paper-only mode and the pick tracker
+
+Real Kite orders are **off** (`kite.real_orders: false` in `config.yaml`). Nothing is placed from Telegram; `/orderson`
+can't override it, buy buttons are hidden, and typed `buy …` messages are refused. GTTs already in Kite (stop-losses,
+target sells) are still tracked and reported.
+
+Every evening the **pick tracker** treats every morning pick as bought at that day's open (₹`max_position_value`
+each, whether you approved it or not), applies the paper stop-loss and hold period, and reports:
+- a scorecard: picks up, picks beating Nifty, average return vs Nifty, net ₹ after charges, and approved vs rejected;
+- each recent pick's entry → latest price, return, Nifty and sector over the same days, best/worst point;
+- for picks that are losing or trailing Nifty, likely reasons read from the data: whole market fell, sector fell,
+  stock-specific weakness, a gap-up open that faded, an overstretched entry (high RSI), gains given back, or
+  negative headlines since (shown escaped, as untrusted text). These are after-the-fact readings, not proven causes.
+
+Set `kite.real_orders: true` to allow real GTT orders again (each still needs a Confirm tap).
+
 ## Setup
 
 ```bash

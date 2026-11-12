@@ -55,6 +55,7 @@ class Paper(BaseModel):
 class Tracker(BaseModel):
     enabled: bool = True     # evening "pick tracker": every morning pick treated as bought (paper)
     detail_limit: int = 25   # most recent picks listed one by one (all are counted in the scorecard)
+    amount_per_pick: float = 100000  # paper money "invested" in every pick (no cap, no capital limit)
 
 
 class Costs(BaseModel):

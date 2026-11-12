@@ -326,6 +326,10 @@ def evening_text(conn, cfg: Config, run_date: date, todays, nifty_ret, sim, trac
                          f"day {day:+.2f}%{vs}{p945}")
     else:
         lines.append("No picks today.")
+    if tracker_block:   # the tracker is the paper analysis; the old approved-only ₹5,000 portfolio is hidden
+        lines += ["", "<b>Running hit rate, all picks</b> (beat Nifty, entry at open)",
+                  reports.horizon_lines(reports.horizon_stats(reports.outcome_frame(conn))), "", FOOTER]
+        return "\n".join(lines)
     closed_today = [p for p in sim.positions if p.get("exit_date") is not None
                     and p["exit_date"].date() == run_date]
     opened_today = [p for p in sim.positions if p["entry_date"].date() == run_date]

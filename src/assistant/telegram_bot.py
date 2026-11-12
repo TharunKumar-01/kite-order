@@ -222,7 +222,7 @@ def run_bot() -> None:
                     k = load_config().kite
                     if not k.real_orders:
                         await q.message.reply_html("Noted. Every pick is tracked as a paper trade either way; "
-                                                   "the evening summary compares your approved vs rejected picks.")
+                                                   "the evening summary auto-buys every pick on paper and compares approved vs rejected.")
                         return
                     await q.message.reply_html(
                         f"Logged for paper trading. To order it in Kite, tap below or type e.g.\n"

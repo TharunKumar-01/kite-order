@@ -21,8 +21,8 @@ Real Kite orders are **off** (`kite.real_orders: false` in `config.yaml`). Nothi
 can't override it, buy buttons are hidden, and typed `buy …` messages are refused. GTTs already in Kite (stop-losses,
 target sells) are still tracked and reported.
 
-Every evening the **pick tracker** treats every morning pick as bought at that day's open (₹`max_position_value`
-each, whether you approved it or not), applies the paper stop-loss and hold period, and reports:
+Every evening the **pick tracker** auto-buys every morning pick on paper at that day's open (₹`tracker.amount_per_pick`, default ₹1,00,000
+each, no Approve tap and no ₹2,500 cap), applies the paper stop-loss and hold period, and reports:
 - a scorecard: picks up, picks beating Nifty, average return vs Nifty, net ₹ after charges, and approved vs rejected;
 - each recent pick's entry → latest price, return, Nifty and sector over the same days, best/worst point;
 - for picks that are losing or trailing Nifty, likely reasons read from the data: whole market fell, sector fell,

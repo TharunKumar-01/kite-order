@@ -1,6 +1,6 @@
 """Pick tracker: every morning pick is treated as bought (paper only) and followed daily.
 
-Each pick is "bought" at its run day's open (+ slippage) for up to `max_position_value`, sold if a close is at or
+Each pick is auto-bought (no Approve tap needed) at its run day's open (+ slippage) for `tracker.amount_per_pick`, sold if a close is at or
 below the paper stop-loss, or after `paper.hold_days` trading days. No capital or position limits, so every
 suggestion is judged, whether you approved it or not. For picks that are losing or trailing Nifty, the evening
 message lists the likely reasons from the data: market, sector, stock-specific moves, a faded gap-up, an
@@ -47,7 +47,7 @@ def follow_pick(r, df: pd.DataFrame | None, bench: pd.DataFrame | None, sector: 
     f0 = _ratio(df, D)
     after = df[df.index >= D].dropna(subset=["close"])
     entry = float(df.at[D, "open"]) / f0 * (1 + slip)
-    qty = max(int(math.floor(cfg.max_position_value / entry)), 1)
+    qty = max(int(math.floor(cfg.tracker.amount_per_pick / entry)), 1)
     exit_day, reason, days = None, None, 0
     hi = lo = entry
     for d, row in after.iterrows():
@@ -162,8 +162,8 @@ def _pct(x: float | None) -> str:
 def tracker_text(tracked: list[dict], cfg: Config, run_date: date,
                  news: dict[str, list[tuple[int, str]]] | None = None, detail_limit: int = 25) -> str:
     news = news or {}
-    lines = ["<b>📒 Pick tracker</b> (paper only: every morning pick treated as bought at that day's open, "
-             f"₹{cfg.max_position_value:,.0f} each, {cfg.paper.stop_loss_pct:g}% stop on the close, "
+    lines = ["<b>📒 Pick tracker</b> (paper only: every morning pick auto-bought at that day's open, "
+             f"no Approve needed, ₹{cfg.tracker.amount_per_pick:,.0f} each, {cfg.paper.stop_loss_pct:g}% stop on the close, "
              f"{cfg.paper.hold_days}-day hold)"]
     if not tracked:
         return "\n".join(lines + ["No picks tracked yet. The first ones appear the evening after a morning run."])
@@ -176,7 +176,10 @@ def tracker_text(tracked: list[dict], cfg: Config, run_date: date,
     avg_x = sum(t["excess"] for t in beat) / len(beat) if beat else None
     net = sum(t["net"] for t in tracked)
     lines.append(f"<b>{n} picks</b>: {up} up · {nb}/{len(beat)} beating Nifty · avg {avg:+.2f}% "
-                 f"(vs Nifty {_pct(avg_x)}) · net ₹{net:+,.0f} after charges")
+                 f"(vs Nifty {_pct(avg_x)})")
+    inv = sum(t["invested"] for t in tracked)
+    lines.append(f"Paper invested ₹{inv:,.0f} → now ₹{inv + net:,.0f} · <b>net ₹{net:+,.0f}</b> after all charges "
+                 f"({net / inv * 100:+.2f}%)")
     by_status: dict[str, list[float]] = {}
     for t in tracked:
         by_status.setdefault(t["status"], []).append(t["ret"])

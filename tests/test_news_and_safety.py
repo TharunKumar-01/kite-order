@@ -12,7 +12,7 @@ def H(t):
 
 
 def test_keyword_scoring(cfg):
-    assert headline_score("HAL bags order win worth 5,000 crore, record quarter", cfg) == 2
+    assert headline_score("HAL bags order win worth 5,000 crore, record quarter", cfg) == 3  # bags order, order win, record
     assert headline_score("SEBI probe into fraud allegations; rating downgrade", cfg) == -3
     assert net_score([H("approval and partnership and expansion and record contract")] * 2, cfg) == 3
     assert net_score([H("fraud probe ban penalty default")], cfg) == -3

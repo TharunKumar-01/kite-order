@@ -176,7 +176,7 @@ def shortlist(cands: list[Candidate], cfg: Config) -> list[Candidate]:
         c.finalize(cfg)
         if latest is not None and c.signal_date < latest:
             c.excluded_reason = "stale data"
-        elif c.last_close > cfg.max_position_value:
+        elif c.last_close > cfg.pick_price_cap:
             c.excluded_reason = "unaffordable"
         elif not c.liquid:
             c.excluded_reason = "illiquid"

@@ -52,6 +52,17 @@ class Paper(BaseModel):
     entry_mode: str = "open"
 
 
+class Channels(BaseModel):
+    enabled: bool = True
+    names: list[str] = Field(default_factory=list)  # public channels (t.me/s/<name> must load without login)
+    lookback_hours: int = 20          # posts this recent feed the morning screen
+    poll_minutes: int = 30            # the 5-min tick caches new posts this often (07:00-22:00 IST)
+    max_pages: int = 8                # ~20 posts per page
+    ocr: bool = True                  # read news-card images with tesseract
+    max_images_per_post: int = 2
+    keep_days: int = 14
+
+
 class Tracker(BaseModel):
     enabled: bool = True     # evening "pick tracker": every morning pick treated as bought (paper)
     detail_limit: int = 25   # most recent picks listed one by one (all are counted in the scorecard)
@@ -157,6 +168,12 @@ class Config(BaseModel):
     kite: Kite = Kite()
     review: Review = Review()
     tracker: Tracker = Tracker()
+    channels: Channels = Channels()
+
+    @property
+    def pick_price_cap(self) -> float:
+        """Max share price a pick may have: the real per-order cap, or the paper amount in paper-only mode."""
+        return self.max_position_value if self.kite.real_orders else self.tracker.amount_per_pick
 
     @property
     def tz(self) -> ZoneInfo:

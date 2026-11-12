@@ -128,6 +128,19 @@ MIGRATIONS: list[str] = [
     ALTER TABLE kite_orders ADD COLUMN tgt_limit REAL;
     ALTER TABLE kite_orders ADD COLUMN tgt_pct REAL;
     """,
+    # v6: posts from public Telegram channels (text + OCR of images), an extra untrusted news source
+    """
+    CREATE TABLE channel_posts (
+        channel TEXT NOT NULL, post_id INTEGER NOT NULL,
+        posted_at TEXT NOT NULL, text TEXT, ocr TEXT, fetched_at TEXT NOT NULL,
+        PRIMARY KEY (channel, post_id)
+    );
+    CREATE INDEX channel_posts_time ON channel_posts(posted_at);
+    """,
+    # v7: image URLs, so OCR can catch up on a later poll
+    """
+    ALTER TABLE channel_posts ADD COLUMN images TEXT;
+    """,
 ]
 
 

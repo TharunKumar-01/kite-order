@@ -130,6 +130,8 @@ def track(conn: sqlite3.Connection, cfg: Config, prices: dict[str, pd.DataFrame]
         sec = prices.get(cfg.market.sector_index.get(r["sector"] or "", ""))
         t = follow_pick(r, prices.get(yf_ticker(r["symbol"])), bench, sec, scores, cfg)
         if t:
+            t["channel"] = conn.execute("SELECT 1 FROM headlines WHERE pick_id=? AND source LIKE 'Telegram%'",
+                                        (r["id"],)).fetchone() is not None
             out.append(t)
     return out
 
@@ -187,6 +189,11 @@ def tracker_text(tracked: list[dict], cfg: Config, run_date: date,
         lines.append("By your call: " + " · ".join(f"{k} {len(v)}: avg {sum(v) / len(v):+.2f}%"
                                                   for k, v in sorted(by_status.items())))
 
+    ch = [t["ret"] for t in tracked if t.get("channel")]
+    other = [t["ret"] for t in tracked if not t.get("channel")]
+    if ch:
+        lines.append(f"📣 Mentioned in the Telegram channel {len(ch)}: avg {sum(ch) / len(ch):+.2f}%"
+                     + (f" · not mentioned {len(other)}: avg {sum(other) / len(other):+.2f}%" if other else ""))
     reasons: Counter = Counter()
     detail = sorted(tracked, key=lambda t: (t["run_date"], t["rank"]), reverse=True)[:detail_limit]
     for t in sorted(tracked, key=lambda t: (t["run_date"], t["rank"])):
@@ -198,7 +205,7 @@ def tracker_text(tracked: list[dict], cfg: Config, run_date: date,
         icon = "🟢" if t["ret"] > 0 and (t["excess"] is None or t["excess"] >= -1) else "🔴" if t["ret"] < 0 else "🟡"
         state = (f"stopped {t['exit_date']:%d %b}" if t["closed"] == "stop" else
                  f"sold {t['exit_date']:%d %b} (hold over)" if t["closed"] == "time" else f"day {t['days']}")
-        lines.append(f"{icon} <b>{esc(t['symbol'])}</b> {t['run_date']:%d %b} [{t['status']}] · {state} · "
+        lines.append(f"{icon} <b>{esc(t['symbol'])}</b>{' 📣' if t.get('channel') else ''} {t['run_date']:%d %b} [{t['status']}] · {state} · "
                      f"₹{t['entry']:,.2f} → ₹{t['last']:,.2f} <b>{t['ret']:+.1f}%</b> (₹{t['net']:+,.0f}) · "
                      f"Nifty {_pct(t['nifty'])}"
                      + (f" · sector {_pct(t['sector_ret'])}" if t["sector_ret"] is not None else "")

@@ -36,6 +36,18 @@ weights:
   sector_tailwind: 0.5
   sector_news: 0.25
 
+channels:
+  # Public Telegram channels read as an extra news source (no login: only channels whose t.me/s/<name> page is
+  # public). Image posts are OCR'd with tesseract. Untrusted text: only matched to stock names + keywords.
+  enabled: true
+  names: [daytradertelugu]
+  lookback_hours: 20
+  poll_minutes: 30
+  max_pages: 8
+  ocr: true
+  max_images_per_post: 2
+  keep_days: 14
+
 tracker:
   enabled: true             # evening "pick tracker": every morning pick treated as bought at that day's open
                             # (₹amount_per_pick each, paper stop + hold), with reasons for the weak ones
@@ -62,8 +74,10 @@ news:
   lookback_hours: 20        # since previous market close
   max_headlines_per_stock: 3
   exclude_at_or_below: -2   # hard exclusion for strongly negative news
-  positive: [order win, contract, approval, upgrade, record, beat, expansion, PLI, partnership]
-  negative: [ban, probe, fraud, downgrade, miss, penalty, resignation, recall, default, cut]
+  positive: [order win, contract, approval, upgrade, record, beat, expansion, PLI, partnership, gets order,
+             wins order, bags order, acquire, approves investment, capacity addition, enhance production]
+  negative: [ban, probe, fraud, downgrade, miss, penalty, resignation, recall, default, cut, OAI,
+             observations, warning letter, import alert, QIP, lock-in, pledge]
   # Sector/theme queries (Google News RSS). Headlines that mention a stock
   # are attached to it; the net keyword score feeds sector_news.
   sector_queries:

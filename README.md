@@ -31,6 +31,26 @@ each, no Approve tap and no ₹2,500 cap), applies the paper stop-loss and hold 
 
 Set `kite.real_orders: true` to allow real GTT orders again (each still needs a Confirm tap).
 
+**Screen price limit:** while real orders are off, the morning screen allows stocks up to the paper amount
+(₹1,00,000) instead of ₹2,500 per share, so expensive stocks are judged too.
+
+## Telegram channel as a news source
+
+`channels.names` in `config.yaml` (now `daytradertelugu`) lists public Telegram channels. They're read from the
+public web page `t.me/s/<name>`, with no Telegram login:
+- The 5-minute tick caches new posts every 30 minutes (07:00–22:00), because t.me often drops connections.
+  The morning screen refreshes once more before it runs.
+- Most posts are news-card images. They're upscaled with macOS `sips` and read with `tesseract` (free, on this
+  Mac, nothing sent anywhere). Each image is read once and kept 14 days in `channel_posts`.
+- A post is linked to a stock when it names it. The headline is the line naming the stock plus the bullets under
+  it. Price tables are skipped, and group companies aren't confused ("Reliance Power" isn't Reliance Industries,
+  "SBI Life" isn't SBI).
+- Channel headlines feed the same keyword news score as Google News. The morning header lists every stock the
+  channel mentioned (🟢/🔴 by keywords), and the pick tracker marks mentioned picks with 📣 and compares their
+  returns with the rest.
+- Post text is untrusted: sanitized, length-capped, only matched against names and keywords, and escaped when
+  shown. It's never treated as an instruction or a reason to buy.
+
 ## Setup
 
 ```bash

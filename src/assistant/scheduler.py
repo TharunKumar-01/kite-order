@@ -122,6 +122,13 @@ def run_tick(conn: sqlite3.Connection, cfg: Config, now: datetime | None = None)
                 alert(f"⚠️ <b>{esc(d.job)} job failed</b> ({rd})\n<code>{esc(last)}</code>\n"
                       f"{esc(redact(where[0]) if where else '')}\nSee logs/tick.log")
                 results.append((d.job, "failed"))
+        try:  # cache posts from public Telegram channels (extra news source for the morning screen)
+            from .channel import maybe_poll
+            n = maybe_poll(conn, cfg, now)
+            if n:
+                log.info("channel poll: %d new posts", n)
+        except Exception as e:  # noqa: BLE001
+            log.warning("channel poll failed: %s", redact(f"{type(e).__name__}: {e}"))
         try:  # track Kite triggers placed from Telegram (read-only unless a stop-loss is due/cleanup)
             from .orders import sync_tick
             sync_tick(conn, cfg, now, lambda m: alert(esc(m)))

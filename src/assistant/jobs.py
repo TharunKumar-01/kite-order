@@ -19,7 +19,7 @@ from .signals import (Candidate, apply_tailwind, build_candidates, indicator_fra
 from .summarizer import get_summarizer
 from .telegram_bot import FOOTER, TelegramClient, esc
 from .universe import Stock, is_trading_day, load_universe, previous_trading_day, yf_ticker
-from .util import iso_utc, now_ist
+from .util import iso_utc, now_ist, now_utc
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ def compute_picks(conn: sqlite3.Connection, cfg: Config, today: date) -> dict:
     stale_n = sum(1 for c in cands if c.signal_date != latest)
     if stale_n:
         missing.append(f"{stale_n} stocks skipped: their latest daily bar is older than {latest.date()}")
-    eligible = [c for c in cands if c.qualifies and c.liquid and c.last_close <= cfg.max_position_value
+    eligible = [c for c in cands if c.qualifies and c.liquid and c.last_close <= cfg.pick_price_cap
                 and c.signal_date == latest]
     eligible.sort(key=lambda c: -(c.price_score + cfg.weights.sector_tailwind * np.clip(c.tailwind, -2, 2)))
     pool = eligible[: cfg.signals.news_candidates]
@@ -79,6 +79,24 @@ def compute_picks(conn: sqlite3.Connection, cfg: Config, today: date) -> dict:
         sv = [sector_scores[t.lower()] for t in c.stock.tags if t.lower() in sector_scores]
         c.sector_news = float(np.mean(sv)) if sv else 0.0
 
+    # ---- public Telegram channels (cached by the tick; refreshed here with a short budget) ----
+    channel_hits: dict[str, list] = {}
+    if cfg.channels.enabled and cfg.channels.names:
+        from . import channel as chmod
+        try:
+            chmod.poll(conn, cfg, budget_s=60)
+        except Exception as e:  # noqa: BLE001
+            log.warning("channel refresh failed: %s", e)
+        posts = chmod.cached_posts(conn, now_utc() - timedelta(hours=cfg.channels.lookback_hours))
+        if not posts:
+            missing.append("no recent posts from " + ", ".join("@" + n for n in cfg.channels.names))
+        channel_hits = chmod.stock_mentions(posts, universe)
+        for c in pool:
+            extra = channel_hits.get(c.stock.symbol, [])
+            if extra:
+                c.headlines = newsmod.dedupe(c.headlines + extra)
+                c.news_score = float(newsmod.net_score(c.headlines, cfg))
+
     picks = shortlist(pool, cfg)
     summ = get_summarizer(cfg)
     for c in picks:
@@ -94,7 +112,7 @@ def compute_picks(conn: sqlite3.Connection, cfg: Config, today: date) -> dict:
             missing.append(stale)
     log.info("premarket compute finished in %.1fs: %d picks", time.time() - t0, len(picks))
     return {"picks": picks, "cues": cues, "bench": bench, "missing": missing, "asof": asof,
-            "n_eval": len(cands), "n_eligible": len(eligible), "cands": cands}
+            "n_eval": len(cands), "n_eligible": len(eligible), "cands": cands, "channel_hits": channel_hits}
 
 
 def header_text(result: dict, today: date) -> str:
@@ -109,6 +127,15 @@ def header_text(result: dict, today: date) -> str:
     for m in result["missing"]:
         lines.append(f"⚠️ {esc(m)}")
     lines.append(f"Screened {result['n_eval']} stocks; {result['n_eligible']} passed rules/affordability/liquidity.")
+    hits = result.get("channel_hits") or {}
+    if hits:
+        cfg = _cfg()
+        tags = []
+        for sym, hs in sorted(hits.items(), key=lambda kv: -len(kv[1]))[:12]:
+            sc = newsmod.net_score(hs, cfg)
+            tags.append(f"{esc(sym)}{'🟢' if sc > 0 else '🔴' if sc < 0 else ''}")
+        lines.append("📣 In the Telegram channel(s) since yesterday: " + ", ".join(tags)
+                     + " <i>(🟢/🔴 = positive/negative words; untrusted, not checked)</i>")
     return "\n".join(lines)
 
 
